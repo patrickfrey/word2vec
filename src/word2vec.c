@@ -29,6 +29,7 @@
 
 const int vocab_hash_size = 30000000;  // Maximum 30 * 0.7 = 21M words in the vocabulary
 
+#undef DO_DEBUG_OUTPUT
 #undef USE_DOUBLE_PRECISION_FLOAT
 #ifdef USE_DOUBLE_PRECISION_FLOAT
 typedef double real;                   // Precision of float numbers
@@ -643,6 +644,21 @@ void *TrainModelThread(void *id) {
   pthread_exit(NULL);
 }
 
+#ifdef DO_DEBUG_OUTPUT
+static void print_value_seq( unsigned int idx, const void* sq, unsigned int sqlen)
+{
+	static const char* HEX = "0123456789ABCDEF";
+	unsigned char const* si = (const unsigned char*) sq;
+	unsigned const char* se = (const unsigned char*) sq + sqlen;
+	for (; si != se; ++si)
+	{
+		unsigned char lo = *si % 16, hi = *si / 16;
+		printf( " %c%c", HEX[hi], HEX[lo]);
+	}
+	printf(" |");
+}
+#endif
+
 void TrainModel() {
   long a, b, c, d;
   FILE *fo;
@@ -672,11 +688,17 @@ void TrainModel() {
     for (a = 0; a < vocab_size; a++) {
       if (vocab[a].word != NULL) {
         fprintf(fo, "%s ", vocab[a].word);
+#ifdef DO_DEBUG_OUTPUT
+        printf( "%s", vocab[a].word);
+#endif
       }
       if (binary) {
         if (portable) {
           for (b = 0; b < layer1_size; b++) {
             real v_n = htonr(syn0[a * layer1_size + b]);
+#ifdef DO_DEBUG_OUTPUT
+            print_value_seq( b, &v_n, sizeof(real));
+#endif
             fwrite(&v_n, sizeof(real), 1, fo);
           }
         } else {
@@ -689,6 +711,9 @@ void TrainModel() {
         fprintf(fo, "%lf ", syn0[a * layer1_size + b]);
       }
       fprintf(fo, "\n");
+#ifdef DO_DEBUG_OUTPUT
+      printf( "\n");
+#endif
     }
   } else {
     // Run K-means on the word vectors
