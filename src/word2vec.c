@@ -17,6 +17,9 @@
 #include <string.h>
 #include <math.h>
 #include <pthread.h>
+#include <arpa/inet.h>
+#include <stdint.h>
+#include <errno.h>
 
 #define MAX_STRING 100
 #define EXP_TABLE_SIZE 1000
@@ -26,7 +29,12 @@
 
 const int vocab_hash_size = 30000000;  // Maximum 30 * 0.7 = 21M words in the vocabulary
 
+#undef USE_DOUBLE_PRECISION_FLOAT
+#ifdef USE_DOUBLE_PRECISION_FLOAT
+typedef double real;                   // Precision of float numbers
+#else
 typedef float real;                    // Precision of float numbers
+#endif
 
 struct vocab_word {
   long long cn;
@@ -37,7 +45,7 @@ struct vocab_word {
 char train_file[MAX_STRING], output_file[MAX_STRING];
 char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
 struct vocab_word *vocab;
-int binary = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 5, num_threads = 1, min_reduce = 1;
+int binary = 0, portable = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 5, num_threads = 1, min_reduce = 1;
 int *vocab_hash;
 long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100;
 long long train_words = 0, word_count_actual = 0, file_size = 0, classes = 0;
@@ -48,6 +56,73 @@ clock_t start;
 int hs = 1, negative = 0;
 const int table_size = 1e8;
 int *table;
+
+#ifdef USE_DOUBLE_PRECISION_FLOAT
+double htonlf( double a) {
+  union
+  {
+    uint64_t iv;
+    uint32_t hv[2];
+    double fv;
+  } value;
+  value.fv = a;
+  uint64_t iv = value.iv;
+  value.hv[0] = htonl( iv >> 32);
+  value.hv[1] = htonl( iv & 0xFFffFFff);
+  return value.fv;
+}
+
+double ntohlf( double a) {
+  union
+  {
+    uint64_t iv;
+    uint32_t hv[2];
+    double fv;
+  } value;
+  value.fv = a;
+  value.hv[0] = ntohl( value.hv[0]);
+  value.hv[1] = ntohl( value.hv[0]);
+  uint64_t iv = value.hv[0];
+  iv <<= 32;
+  iv |= value.hv[1];
+  value.iv = iv;
+  return value.fv;
+}
+real ntohr( real a) {
+  return ntohlf(a);
+}
+real htonr( real a) {
+  return htonlf(a);
+}
+#else
+float htonf( float a) {
+  union
+  {
+    uint32_t iv;
+    float fv;
+  } value;
+  value.fv = a;
+  value.iv = htonl( value.iv);
+  return value.fv;
+}
+
+float ntohf( float a) {
+  union
+  {
+    uint32_t iv;
+    float fv;
+  } value;
+  value.fv = a;
+  value.iv = ntohl( value.iv);
+  return value.fv;
+}
+real ntohr( real a) {
+  return ntohf(a);
+}
+real htonr( real a) {
+  return htonf(a);
+}
+#endif 
 
 void InitUnigramTable() {
   int a, i;
@@ -289,7 +364,7 @@ void LearnVocabFromTrainFile() {
   for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
   fin = fopen(train_file, "rb");
   if (fin == NULL) {
-    printf("ERROR: training data file not found!\n");
+    printf("ERROR: cannot open training data file: %s\n", strerror(errno));
     exit(1);
   }
   vocab_size = 0;
@@ -321,8 +396,12 @@ void LearnVocabFromTrainFile() {
 void SaveVocab() {
   long long i;
   FILE *fo = fopen(save_vocab_file, "wb");
-  for (i = 0; i < vocab_size; i++) fprintf(fo, "%s %lld\n", vocab[i].word, vocab[i].cn);
-  fclose(fo);
+  if (fo == NULL) {
+     printf("ERROR: cannot open vocab file: %s\n", strerror(errno));
+  } else {
+    for (i = 0; i < vocab_size; i++) fprintf(fo, "%s %lld\n", vocab[i].word, vocab[i].cn);
+    fclose(fo);
+  }
 }
 
 void ReadVocab() {
@@ -331,7 +410,7 @@ void ReadVocab() {
   char word[MAX_STRING];
   FILE *fin = fopen(read_vocab_file, "rb");
   if (fin == NULL) {
-    printf("Vocabulary file not found\n");
+    printf("Cannot open vocabulary file %s\n", strerror(errno));
     exit(1);
   }
   for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
@@ -350,7 +429,7 @@ void ReadVocab() {
   }
   fin = fopen(train_file, "rb");
   if (fin == NULL) {
-    printf("ERROR: training data file not found!\n");
+    printf("ERROR: Cannot open training data file: %s\n", strerror(errno));
     exit(1);
   }
   fseek(fin, 0, SEEK_END);
@@ -584,7 +663,7 @@ void TrainModel() {
   for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
   fo = fopen(output_file, "wb");
   if (fo == NULL) {
-    fprintf(stderr, "Cannot open %s: permission denied\n", output_file);
+    fprintf(stderr, "Cannot open %s: %s\n", output_file, strerror(errno));
     exit(1);
   }
   if (classes == 0) {
@@ -594,8 +673,21 @@ void TrainModel() {
       if (vocab[a].word != NULL) {
         fprintf(fo, "%s ", vocab[a].word);
       }
-      if (binary) for (b = 0; b < layer1_size; b++) fwrite(&syn0[a * layer1_size + b], sizeof(real), 1, fo);
-      else for (b = 0; b < layer1_size; b++) fprintf(fo, "%lf ", syn0[a * layer1_size + b]);
+      if (binary) {
+        if (portable) {
+          for (b = 0; b < layer1_size; b++) {
+            real v_n = htonr(syn0[a * layer1_size + b]);
+            fwrite(&v_n, sizeof(real), 1, fo);
+          }
+        } else {
+          for (b = 0; b < layer1_size; b++) {
+            fwrite(&syn0[a * layer1_size + b], sizeof(real), 1, fo);
+          }
+        }
+      }
+      else for (b = 0; b < layer1_size; b++) {
+        fprintf(fo, "%lf ", syn0[a * layer1_size + b]);
+      }
       fprintf(fo, "\n");
     }
   } else {
@@ -699,6 +791,8 @@ int main(int argc, char **argv) {
     printf("\t\tSet the debug mode (default = 2 = more info during training)\n");
     printf("\t-binary <int>\n");
     printf("\t\tSave the resulting vectors in binary moded; default is 0 (off)\n");
+    printf("\t-portable <int>\n");
+    printf("\t\tIn case of binary, save the resulting binary vectors in portable network byte order; default is 0 (off)\n");
     printf("\t-save-vocab <file>\n");
     printf("\t\tThe vocabulary will be saved to <file>\n");
     printf("\t-read-vocab <file>\n");
@@ -718,6 +812,7 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-read-vocab", argc, argv)) > 0) strcpy(read_vocab_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-debug", argc, argv)) > 0) debug_mode = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-binary", argc, argv)) > 0) binary = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-portable", argc, argv)) > 0) portable = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-cbow", argc, argv)) > 0) cbow = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-alpha", argc, argv)) > 0) alpha = atof(argv[i + 1]);
   if ((i = ArgPos((char *)"-output", argc, argv)) > 0) strcpy(output_file, argv[i + 1]);
