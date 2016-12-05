@@ -201,7 +201,11 @@ int ReadWordIndex(FILE *fin) {
 int AddWordToVocab(char *word) {
   unsigned int hash, length = strlen(word) + 1;
   if (length > MAX_STRING) length = MAX_STRING;
-  vocab[vocab_size].word = (char *)calloc(length, sizeof(char));
+  if ((vocab[vocab_size].word = (char *)calloc(length, sizeof(char))) == NULL)
+  {
+      fprintf(stderr, "out of memory\n");
+      exit(1);
+  }
   strcpy(vocab[vocab_size].word, word);
   vocab[vocab_size].cn = 0;
   vocab_size++;
@@ -209,6 +213,11 @@ int AddWordToVocab(char *word) {
   if (vocab_size + 2 >= vocab_max_size) {
     vocab_max_size += 1000;
     vocab = (struct vocab_word *)realloc(vocab, vocab_max_size * sizeof(struct vocab_word));
+    if (vocab == NULL)
+    {
+        fprintf(stderr, "out of memory\n");
+        exit(1);
+    }
   }
   hash = GetWordHash(word);
   while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
@@ -262,11 +271,21 @@ void SortVocab() {
       train_words += vocab[a].cn;
     }
   }
-  vocab = (struct vocab_word *)realloc(vocab, (vocab_size + 1) * sizeof(struct vocab_word));
+  vocab = (struct vocab_word *)realloc( vocab, (vocab_size + 1) * sizeof(struct vocab_word));
+  if (vocab == NULL)
+  {
+    fprintf(stderr, "out of memory\n");
+    exit(1);
+  }
   // Allocate memory for the binary tree construction
   for (a = 0; a < vocab_size; a++) {
     vocab[a].code = (char *)calloc(MAX_CODE_LENGTH, sizeof(char));
     vocab[a].point = (int *)calloc(MAX_CODE_LENGTH, sizeof(int));
+    if (vocab[a].code == NULL || vocab[a].point == NULL)
+    {
+      fprintf(stderr, "out of memory\n");
+      exit(1);
+    }
   }
 }
 
@@ -299,6 +318,11 @@ void CreateBinaryTree() {
   long long *count = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
   long long *binary = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
   long long *parent_node = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
+  if (count == NULL || binary == NULL || parent_node == NULL)
+  {
+    fprintf(stderr, "out of memory\n");
+    exit(1);
+  }
   for (a = 0; a < vocab_size; a++) count[a] = vocab[a].cn;
   for (a = vocab_size; a < vocab_size * 2; a++) count[a] = 1e15;
   pos1 = vocab_size - 1;
@@ -480,6 +504,11 @@ void *TrainModelThread(void *id) {
   clock_t now;
   real *neu1 = (real *)calloc(layer1_size, sizeof(real));
   real *neu1e = (real *)calloc(layer1_size, sizeof(real));
+  if (neu1 == NULL || neu1e == NULL)
+  {
+    fprintf( stderr, "out of memory\n");
+    exit(1);
+  }
   FILE *fi = fopen(train_file, "rb");
   if (fi == NULL) {
     fprintf(stderr, "no such file or directory: %s", train_file);
@@ -724,8 +753,18 @@ void TrainModel() {
       exit(1);
     }
     int *cl = (int *)calloc(vocab_size, sizeof(int));
+    if (cl == NULL)
+    {
+      fprintf(stderr, "out of memory\n");
+      exit(1);
+    }
     real closev, x;
     real *cent = (real *)calloc(classes * layer1_size, sizeof(real));
+    if (cent == NULL)
+    {
+      fprintf(stderr, "out of memory\n");
+      exit(1);
+    }
     for (a = 0; a < vocab_size; a++) cl[a] = a % clcn;
     for (a = 0; a < iter; a++) {
       for (b = 0; b < clcn * layer1_size; b++) cent[b] = 0;
@@ -851,7 +890,7 @@ int main(int argc, char **argv) {
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
   vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
   expTable = (real *)malloc((EXP_TABLE_SIZE + 1) * sizeof(real));
-  if (expTable == NULL) {
+  if (vocab == NULL || vocab_hash == NULL || expTable == NULL) {
     fprintf(stderr, "out of memory\n");
     exit(1);
   }
