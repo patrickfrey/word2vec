@@ -33,8 +33,10 @@ const int vocab_hash_size = 30000000;  // Maximum 30 * 0.7 = 21M words in the vo
 #undef USE_DOUBLE_PRECISION_FLOAT
 #ifdef USE_DOUBLE_PRECISION_FLOAT
 typedef double real;                   // Precision of float numbers
+typedef uint64_t real_net_t;
 #else
 typedef float real;                    // Precision of float numbers
+typedef uint32_t real_net_t;
 #endif
 
 struct vocab_word {
@@ -59,7 +61,7 @@ const int table_size = 1e8;
 int *table;
 
 #ifdef USE_DOUBLE_PRECISION_FLOAT
-double htonlf( double a) {
+uint64_t htonlf( double a) {
   union
   {
     uint64_t iv;
@@ -70,33 +72,33 @@ double htonlf( double a) {
   uint64_t iv = value.iv;
   value.hv[0] = htonl( iv >> 32);
   value.hv[1] = htonl( iv & 0xFFffFFff);
-  return value.fv;
+  return value.iv;
 }
 
-double ntohlf( double a) {
+double ntohlf( uint64_t a) {
   union
   {
     uint64_t iv;
     uint32_t hv[2];
     double fv;
   } value;
-  value.fv = a;
+  value.iv = a;
   value.hv[0] = ntohl( value.hv[0]);
-  value.hv[1] = ntohl( value.hv[0]);
+  value.hv[1] = ntohl( value.hv[1]);
   uint64_t iv = value.hv[0];
   iv <<= 32;
   iv |= value.hv[1];
   value.iv = iv;
   return value.fv;
 }
-real ntohr( real a) {
+real ntohr( real_net_t a) {
   return ntohlf(a);
 }
-real htonr( real a) {
+real_net_t htonr( real a) {
   return htonlf(a);
 }
 #else
-float htonf( float a) {
+uint32_t htonf( float a) {
   union
   {
     uint32_t iv;
@@ -104,23 +106,22 @@ float htonf( float a) {
   } value;
   value.fv = a;
   value.iv = htonl( value.iv);
-  return value.fv;
+  return value.iv;
 }
 
-float ntohf( float a) {
+float ntohf( uint32_t a) {
   union
   {
     uint32_t iv;
     float fv;
   } value;
-  value.fv = a;
-  value.iv = ntohl( value.iv);
+  value.iv = ntohl( a);
   return value.fv;
 }
-real ntohr( real a) {
+real ntohr( real_net_t a) {
   return ntohf(a);
 }
-real htonr( real a) {
+real_net_t htonr( real a) {
   return htonf(a);
 }
 #endif 
@@ -724,11 +725,11 @@ void TrainModel() {
       if (binary) {
         if (portable) {
           for (b = 0; b < layer1_size; b++) {
-            real v_n = htonr(syn0[a * layer1_size + b]);
+            real_net_t v_n = htonr(syn0[a * layer1_size + b]);
 #ifdef DO_DEBUG_OUTPUT
             print_value_seq( b, &v_n, sizeof(real));
 #endif
-            fwrite(&v_n, sizeof(real), 1, fo);
+            fwrite(&v_n, sizeof(real_net_t), 1, fo);
           }
         } else {
           for (b = 0; b < layer1_size; b++) {
