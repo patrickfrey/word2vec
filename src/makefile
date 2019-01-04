@@ -1,5 +1,6 @@
 SCRIPTS_DIR=../scripts
 BIN_DIR=../bin
+INSTALL_DIR=/usr/local/bin
 
 CC = gcc
 #The -Ofast might not work with older versions of gcc; in that case, use -O2
@@ -21,3 +22,7 @@ compute-accuracy : compute-accuracy.c
 
 clean:
 	pushd ${BIN_DIR} && rm -rf word2vec word2phrase distance word-analogy compute-accuracy; popd
+
+install: all
+	cp ${BIN_DIR}/word2vec  ${INSTALL_DIR}/word2vec
+	cp ${BIN_DIR}/word2phrase  ${INSTALL_DIR}/word2phrase
