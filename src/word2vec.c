@@ -20,6 +20,7 @@
 #include <arpa/inet.h>
 #include <stdint.h>
 #include <errno.h>
+#include <malloc.h>
 
 #define MAX_STRING_ARRAY 10
 #define MAX_STRING 100
@@ -29,8 +30,13 @@
 #define MAX_CODE_LENGTH 40
 
 const int vocab_hash_size = 200*1000*1000;  // Maximum 200 * 0.7 = 140M words in the vocabulary
-long long memory_allocated = 0;
 
+#ifdef __GNUC__
+long long memory_allocated = 0;
+void free_( void* ptr)
+{
+	memory_allocated -= malloc_usable_size( ptr);
+}
 void* malloc_( int size) {
 	memory_allocated += size;
 	return malloc( size);
@@ -40,9 +46,16 @@ void* calloc_( int memb, int size) {
 	return calloc( memb, size);
 }
 void* realloc_( void* ptr, int size) {
+	memory_allocated -= malloc_usable_size( ptr);
 	memory_allocated += size;
 	return realloc( ptr, size);
 }
+#else
+#define free_ free
+#define malloc_ malloc
+#define calloc_ calloc
+#define realloc_ realloc
+#endif
 
 #undef DO_DEBUG_OUTPUT
 #undef USE_DOUBLE_PRECISION_FLOAT
@@ -467,7 +480,11 @@ void LearnVocabFromTrainFile() {
     if (feof(fin)) break;
     train_words++;
     if ((debug_mode > 1) && (train_words % 1000000 == 0)) {
+#ifdef __GNUC__
       printf("words %lld K, memory %u mega bytes\n", train_words / 1000, (unsigned int)(memory_allocated / (1024*1024)));
+#else
+      printf("words %lld K\n", train_words / 1000);
+#endif
       fflush(stdout);
     }
     i = SearchVocab(word);
@@ -484,7 +501,9 @@ void LearnVocabFromTrainFile() {
   if (debug_mode > 0) {
     printf("Vocab size: %lld\n", vocab_size);
     printf("Words in train file: %lld\n", train_words);
+#ifdef __GNUC__
     printf("Memory allocated for vocabulary: %u mega bytes\n", (unsigned int)(memory_allocated / (1024 * 1024)));
+#endif
   }
   file_size = ftell(fin);
   fclose(fin);
@@ -523,7 +542,9 @@ void ReadVocab() {
   if (debug_mode > 0) {
     printf("Vocab size: %lld\n", vocab_size);
     printf("Words in train file: %lld\n", train_words);
+#ifdef __GNUC__
     printf("Memory allocated for vocabulary: %u mega bytes\n", (unsigned int)(memory_allocated / (1024 * 1024)));
+#endif
   }
   fin = fopen(train_file, "rb");
   if (fin == NULL) {
