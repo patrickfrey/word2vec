@@ -466,8 +466,8 @@ void LearnVocabFromTrainFile() {
     ReadWord(word, fin);
     if (feof(fin)) break;
     train_words++;
-    if ((debug_mode > 1) && (train_words % 100000 == 0)) {
-      printf("words %lldK memory %uM\n", train_words / 1000, (unsigned int)(memory_allocated / (1024*1024)));
+    if ((debug_mode > 1) && (train_words % 1000000 == 0)) {
+      printf("words %lld K, memory %u mega bytes\n", train_words / 1000, (unsigned int)(memory_allocated / (1024*1024)));
       fflush(stdout);
     }
     i = SearchVocab(word);
