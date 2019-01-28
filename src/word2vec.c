@@ -481,9 +481,9 @@ void LearnVocabFromTrainFile() {
     train_words++;
     if ((debug_mode > 1) && (train_words % 1000000 == 0)) {
 #ifdef __GNUC__
-      printf("words %lld K, memory %u mega bytes\n", train_words / 1000, (unsigned int)(memory_allocated >> 20));
+      printf("words %lld million, memory %u mega bytes\n", train_words / 1000000, (unsigned int)(memory_allocated >> 20));
 #else
-      printf("words %lld K\n", train_words / 1000);
+      printf("words %lld million\n", train_words / 1000000);
 #endif
       fflush(stdout);
     }
