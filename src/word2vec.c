@@ -57,7 +57,6 @@ void* realloc_( void* ptr, int size) {
 #define realloc_ realloc
 #endif
 
-#undef DO_DEBUG_OUTPUT
 #undef USE_DOUBLE_PRECISION_FLOAT
 #ifdef USE_DOUBLE_PRECISION_FLOAT
 typedef double real;                   // Precision of float numbers
@@ -481,9 +480,9 @@ void LearnVocabFromTrainFile() {
     train_words++;
     if ((debug_mode > 1) && (train_words % 1000000 == 0)) {
 #ifdef __GNUC__
-      printf("words %lld million, memory %u mega bytes\n", train_words / 1000000, (unsigned int)(memory_allocated >> 20));
+      printf("words %d million, vocab size=%u million, memory %u mega bytes\n", (unsigned int)(train_words / 1000000), (unsigned int)(vocab_size / 1000000), (unsigned int)(memory_allocated >> 20));
 #else
-      printf("words %lld million\n", train_words / 1000000);
+      printf("words %d million, vocab size=%u million\n", (unsigned int)(train_words / 1000000), (unsigned int)(vocab_size / 1000000));
 #endif
       fflush(stdout);
     }
@@ -767,21 +766,6 @@ void *TrainModelThread(void *id) {
   pthread_exit(NULL);
 }
 
-#ifdef DO_DEBUG_OUTPUT
-static void print_value_seq( unsigned int idx, const void* sq, unsigned int sqlen)
-{
-	static const char* HEX = "0123456789ABCDEF";
-	unsigned char const* si = (const unsigned char*) sq;
-	unsigned const char* se = (const unsigned char*) sq + sqlen;
-	for (; si != se; ++si)
-	{
-		unsigned char lo = *si % 16, hi = *si / 16;
-		printf( " %c%c", HEX[hi], HEX[lo]);
-	}
-	printf(" |");
-}
-#endif
-
 void TrainModel() {
   long a, b, c, d;
   FILE *fo;
@@ -811,17 +795,11 @@ void TrainModel() {
     for (a = 0; a < vocab_size; a++) {
       if (vocab[a].word != NULL) {
         fprintf(fo, "%s ", vocab[a].word);
-#ifdef DO_DEBUG_OUTPUT
-        printf( "%s", vocab[a].word);
-#endif
       }
       if (binary) {
         if (portable) {
           for (b = 0; b < layer1_size; b++) {
             real_net_t v_n = htonr(syn0[a * layer1_size + b]);
-#ifdef DO_DEBUG_OUTPUT
-            print_value_seq( b, &v_n, sizeof(real));
-#endif
             fwrite(&v_n, sizeof(real_net_t), 1, fo);
           }
         } else {
@@ -834,9 +812,6 @@ void TrainModel() {
         fprintf(fo, "%lf ", syn0[a * layer1_size + b]);
       }
       fprintf(fo, "\n");
-#ifdef DO_DEBUG_OUTPUT
-      printf( "\n");
-#endif
     }
   } else {
     // Run K-means on the word vectors
