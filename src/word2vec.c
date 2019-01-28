@@ -36,19 +36,23 @@ long long memory_allocated = 0;
 void free_( void* ptr)
 {
 	memory_allocated -= malloc_usable_size( ptr);
+	free( ptr);
 }
 void* malloc_( int size) {
-	memory_allocated += size;
-	return malloc( size);
+	void* ptr = malloc( size);
+	if (ptr) memory_allocated += malloc_usable_size( ptr);
+	return ptr;
 }
 void* calloc_( int memb, int size) {
-	memory_allocated += size * memb;
-	return calloc( memb, size);
+	void* ptr = calloc( memb, size);
+	if (ptr) memory_allocated += malloc_usable_size( ptr);
+	return ptr;
 }
 void* realloc_( void* ptr, int size) {
-	memory_allocated -= malloc_usable_size( ptr);
-	memory_allocated += size;
-	return realloc( ptr, size);
+	int prevsize = ptr ? malloc_usable_size( ptr) : 0;
+	ptr = realloc( ptr, size);
+	if (ptr) memory_allocated += malloc_usable_size( ptr) - prevsize;
+	return ptr;
 }
 #else
 #define free_ free
@@ -267,7 +271,7 @@ int ReadWordIndex(FILE *fin) {
 // Adds a word to the vocabulary
 int AddWordToVocab(char *word) {
   unsigned int hash, length = strlen(word);
-  if (length > MAX_STRING) length = MAX_STRING-1;
+  if (length >= MAX_STRING) length = MAX_STRING-1;
   if ((vocab[vocab_size].word = (char *)malloc_( length+1)) == NULL)
   {
       fprintf(stderr, "out of memory\n");
