@@ -127,7 +127,7 @@ real_net_t htonr( real a) {
 #endif 
 
 // Hash function 'sdbm' from 'http://www.cse.yorku.ca/~oz/hash.html'
-long sdbm_hash( const char *str)
+unsigned long sdbm_hash( const char *str)
 {
   unsigned char const* si = (unsigned char const*)str;
   unsigned long hash = 5381;
