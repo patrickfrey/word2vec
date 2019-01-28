@@ -27,7 +27,7 @@
 #define MAX_SENTENCE_LENGTH 1000
 #define MAX_CODE_LENGTH 40
 
-const int vocab_hash_size = 30000000;  // Maximum 30 * 0.7 = 21M words in the vocabulary
+const int vocab_hash_size = 200*1000*1000;  // Maximum 200 * 0.7 = 140M words in the vocabulary
 
 #undef DO_DEBUG_OUTPUT
 #undef USE_DOUBLE_PRECISION_FLOAT
@@ -126,6 +126,16 @@ real_net_t htonr( real a) {
 }
 #endif 
 
+// Hash function 'sdbm' from 'http://www.cse.yorku.ca/~oz/hash.html'
+long sdbm_hash( const char *str)
+{
+  unsigned char const* si = (unsigned char const*)str;
+  unsigned long hash = 5381;
+  unsigned char c = *si++;
+  for (; c; c = *si++) {hash = c + (hash << 6) + (hash << 16) - hash;}
+  return hash;
+}
+
 void InitUnigramTable() {
   int a, i;
   long long train_words_pow = 0;
@@ -172,11 +182,8 @@ void ReadWord(char *word, FILE *fin) {
 }
 
 // Returns hash value of a word
-int GetWordHash(char *word) {
-  unsigned long long a, hash = 0;
-  for (a = 0; a < strlen(word); a++) hash = hash * 257 + word[a];
-  hash = hash % vocab_hash_size;
-  return hash;
+int GetWordHash( char *word) {
+  return sdbm_hash( word) % vocab_hash_size;
 }
 
 // Returns position of a word in the vocabulary; if the word is not found, returns -1
