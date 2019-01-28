@@ -21,6 +21,7 @@
 #include <stdint.h>
 #include <errno.h>
 
+#define MAX_STRING_ARRAY 10
 #define MAX_STRING 100
 #define EXP_TABLE_SIZE 1000
 #define MAX_EXP 6
@@ -47,6 +48,8 @@ struct vocab_word {
 
 char train_file[MAX_STRING], output_file[MAX_STRING];
 char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
+char word_prefix_use_always_buf[ MAX_STRING] = "";
+char* word_prefix_use_always[ MAX_STRING_ARRAY] = {0};
 struct vocab_word *vocab;
 int binary = 0, portable = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 5, num_threads = 1, min_reduce = 1;
 int *vocab_hash;
@@ -136,6 +139,36 @@ unsigned long sdbm_hash( const char *str)
   return hash;
 }
 
+void InitAlwaysUsedWords()
+{
+  int i = 0, bi = 0, last_i = 0;
+  for (i = 0; i < MAX_STRING && word_prefix_use_always_buf[i]; ++i) {
+    if (word_prefix_use_always_buf[i] == ',') {
+      word_prefix_use_always_buf[i] = '\0';
+      if (i == last_i) {
+        last_i = i+1;
+        continue;
+      }
+      word_prefix_use_always[ bi++] = word_prefix_use_always_buf + last_i;
+      last_i = i+1;
+
+      if (bi >= MAX_STRING_ARRAY-1) {
+        fprintf(stderr, "array passed with option --always exceeds size %d\n", (int)MAX_STRING_ARRAY);
+        exit(1);
+      }
+    }
+  }
+  if (word_prefix_use_always_buf[last_i]) {
+     word_prefix_use_always[ bi++] = word_prefix_use_always_buf + last_i;
+  }
+  word_prefix_use_always[ bi] = 0;
+
+  char** ai = word_prefix_use_always;
+  for (; *ai; ++ai) {
+    fprintf( stderr, "do always use words with prefix '%s'\n", *ai);
+  }
+}
+
 void InitUnigramTable() {
   int a, i;
   long long train_words_pow = 0;
@@ -207,14 +240,15 @@ int ReadWordIndex(FILE *fin) {
 
 // Adds a word to the vocabulary
 int AddWordToVocab(char *word) {
-  unsigned int hash, length = strlen(word) + 1;
-  if (length > MAX_STRING) length = MAX_STRING;
-  if ((vocab[vocab_size].word = (char *)calloc(length, sizeof(char))) == NULL)
+  unsigned int hash, length = strlen(word);
+  if (length > MAX_STRING) length = MAX_STRING-1;
+  if ((vocab[vocab_size].word = (char *)malloc( length+1)) == NULL)
   {
       fprintf(stderr, "out of memory\n");
       exit(1);
   }
-  strcpy(vocab[vocab_size].word, word);
+  memcpy(vocab[vocab_size].word, word, length);
+  vocab[vocab_size].word[ length] = 0;
   vocab[vocab_size].cn = 0;
   vocab_size++;
   // Reallocate memory if needed
@@ -266,8 +300,20 @@ void SortVocab() {
   size = vocab_size;
   train_words = 0;
   for (a = 1; a < size; a++) { // Skip </s>
+    // Words with a prefix marked as '--always' will always be used
+    int useAlways = 0;
+    char** ai = word_prefix_use_always;
+    const char* word = vocab[a].word;
+    for (; *ai; ++ai) {
+      int pi = 0;
+      for (; (*ai)[pi] && word[pi] && (*ai)[pi] == word[pi]; ++pi){}
+      if (!(*ai)[pi]) {
+        useAlways = 1;
+        break;
+      }
+    }
     // Words occuring less than min_count times will be discarded from the vocab
-    if (vocab[a].cn < min_count) {
+    if (vocab[a].cn < min_count && !useAlways) {
       vocab_size--;
       free(vocab[a].word);
       vocab[a].word = NULL;
@@ -415,7 +461,10 @@ void LearnVocabFromTrainFile() {
       a = AddWordToVocab(word);
       vocab[a].cn = 1;
     } else vocab[i].cn++;
-    if (vocab_size > vocab_hash_size * 0.7) ReduceVocab();
+    if (vocab_size > vocab_hash_size * 0.7) {
+      fprintf( stderr, "hash table size too small");
+      exit(1);
+    }
   }
   SortVocab();
   if (debug_mode > 0) {
@@ -865,6 +914,8 @@ int main(int argc, char **argv) {
     printf("\t\tSave the resulting vectors in binary moded; default is 0 (off)\n");
     printf("\t-portable <int>\n");
     printf("\t\tIn case of binary, save the resulting binary vectors in portable network byte order; default is 0 (off)\n");
+    printf("\t-always <prefix>\n");
+    printf("\t\tDo use index words with prefix <prefix> (separated by commas)\n");
     printf("\t-save-vocab <file>\n");
     printf("\t\tThe vocabulary will be saved to <file>\n");
     printf("\t-read-vocab <file>\n");
@@ -895,6 +946,10 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-threads", argc, argv)) > 0) num_threads = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-min-count", argc, argv)) > 0) min_count = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-classes", argc, argv)) > 0) classes = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-always", argc, argv)) > 0) strcpy(word_prefix_use_always_buf, argv[i + 1]);
+
+  InitAlwaysUsedWords();
+
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
   vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
   expTable = (real *)malloc((EXP_TABLE_SIZE + 1) * sizeof(real));
