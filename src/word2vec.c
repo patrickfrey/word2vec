@@ -29,6 +29,20 @@
 #define MAX_CODE_LENGTH 40
 
 const int vocab_hash_size = 200*1000*1000;  // Maximum 200 * 0.7 = 140M words in the vocabulary
+long long memory_allocated = 0;
+
+void* malloc_( int size) {
+	memory_allocated += size;
+	return malloc( size);
+}
+void* calloc_( int memb, int size) {
+	memory_allocated += size * memb;
+	return calloc( memb, size);
+}
+void* realloc_( void* ptr, int size) {
+	memory_allocated += size;
+	return realloc( ptr, size);
+}
 
 #undef DO_DEBUG_OUTPUT
 #undef USE_DOUBLE_PRECISION_FLOAT
@@ -173,7 +187,7 @@ void InitUnigramTable() {
   int a, i;
   long long train_words_pow = 0;
   real d1, power = 0.75;
-  table = (int *)malloc(table_size * sizeof(int));
+  table = (int *)malloc_(table_size * sizeof(int));
   if (table == NULL) {
     fprintf(stderr, "cannot allocate memory for the table\n");
     exit(1);
@@ -242,7 +256,7 @@ int ReadWordIndex(FILE *fin) {
 int AddWordToVocab(char *word) {
   unsigned int hash, length = strlen(word);
   if (length > MAX_STRING) length = MAX_STRING-1;
-  if ((vocab[vocab_size].word = (char *)malloc( length+1)) == NULL)
+  if ((vocab[vocab_size].word = (char *)malloc_( length+1)) == NULL)
   {
       fprintf(stderr, "out of memory\n");
       exit(1);
@@ -254,7 +268,7 @@ int AddWordToVocab(char *word) {
   // Reallocate memory if needed
   if (vocab_size + 2 >= vocab_max_size) {
     vocab_max_size += 1000;
-    vocab = (struct vocab_word *)realloc(vocab, vocab_max_size * sizeof(struct vocab_word));
+    vocab = (struct vocab_word *)realloc_(vocab, vocab_max_size * sizeof(struct vocab_word));
     if (vocab == NULL)
     {
         fprintf(stderr, "out of memory\n");
@@ -325,7 +339,7 @@ void SortVocab() {
       train_words += vocab[a].cn;
     }
   }
-  vocab = (struct vocab_word *)realloc( vocab, (vocab_size + 1) * sizeof(struct vocab_word));
+  vocab = (struct vocab_word *)realloc_( vocab, (vocab_size + 1) * sizeof(struct vocab_word));
   if (vocab == NULL)
   {
     fprintf(stderr, "out of memory\n");
@@ -333,8 +347,8 @@ void SortVocab() {
   }
   // Allocate memory for the binary tree construction
   for (a = 0; a < vocab_size; a++) {
-    vocab[a].code = (char *)calloc(MAX_CODE_LENGTH, sizeof(char));
-    vocab[a].point = (int *)calloc(MAX_CODE_LENGTH, sizeof(int));
+    vocab[a].code = (char *)calloc_(MAX_CODE_LENGTH, sizeof(char));
+    vocab[a].point = (int *)calloc_(MAX_CODE_LENGTH, sizeof(int));
     if (vocab[a].code == NULL || vocab[a].point == NULL)
     {
       fprintf(stderr, "out of memory\n");
@@ -369,9 +383,9 @@ void ReduceVocab() {
 void CreateBinaryTree() {
   long long a, b, i, min1i, min2i, pos1, pos2, point[MAX_CODE_LENGTH];
   char code[MAX_CODE_LENGTH];
-  long long *count = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
-  long long *binary = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
-  long long *parent_node = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
+  long long *count = (long long *)calloc_(vocab_size * 2 + 1, sizeof(long long));
+  long long *binary = (long long *)calloc_(vocab_size * 2 + 1, sizeof(long long));
+  long long *parent_node = (long long *)calloc_(vocab_size * 2 + 1, sizeof(long long));
   if (count == NULL || binary == NULL || parent_node == NULL)
   {
     fprintf(stderr, "out of memory\n");
@@ -508,6 +522,7 @@ void ReadVocab() {
   if (debug_mode > 0) {
     printf("Vocab size: %lld\n", vocab_size);
     printf("Words in train file: %lld\n", train_words);
+    printf("Memory allocated for vocabulary: %u mega bytes\n", (unsigned int)(memory_allocated / (1024 * 1024)));
   }
   fin = fopen(train_file, "rb");
   if (fin == NULL) {
@@ -516,7 +531,7 @@ void ReadVocab() {
   }
   fseek(fin, 0, SEEK_END);
   file_size = ftell(fin);
-  fclose(fin);
+  fclose(fin);  
 }
 
 void InitNet() {
@@ -559,8 +574,8 @@ void *TrainModelThread(void *id) {
   unsigned long long next_random = (long long)id;
   real f, g;
   clock_t now;
-  real *neu1 = (real *)calloc(layer1_size, sizeof(real));
-  real *neu1e = (real *)calloc(layer1_size, sizeof(real));
+  real *neu1 = (real *)calloc_(layer1_size, sizeof(real));
+  real *neu1e = (real *)calloc_(layer1_size, sizeof(real));
   if (neu1 == NULL || neu1e == NULL)
   {
     fprintf( stderr, "out of memory\n");
@@ -748,7 +763,7 @@ static void print_value_seq( unsigned int idx, const void* sq, unsigned int sqle
 void TrainModel() {
   long a, b, c, d;
   FILE *fo;
-  pthread_t *pt = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
+  pthread_t *pt = (pthread_t *)malloc_(num_threads * sizeof(pthread_t));
   if (pt == NULL) {
     fprintf(stderr, "cannot allocate memory for threads\n");
     exit(1);
@@ -804,19 +819,19 @@ void TrainModel() {
   } else {
     // Run K-means on the word vectors
     int clcn = classes, iter = 10, closeid;
-    int *centcn = (int *)malloc(classes * sizeof(int));
+    int *centcn = (int *)malloc_(classes * sizeof(int));
     if (centcn == NULL) {
       fprintf(stderr, "cannot allocate memory for centcn\n");
       exit(1);
     }
-    int *cl = (int *)calloc(vocab_size, sizeof(int));
+    int *cl = (int *)calloc_(vocab_size, sizeof(int));
     if (cl == NULL)
     {
       fprintf(stderr, "out of memory\n");
       exit(1);
     }
     real closev, x;
-    real *cent = (real *)calloc(classes * layer1_size, sizeof(real));
+    real *cent = (real *)calloc_(classes * layer1_size, sizeof(real));
     if (cent == NULL)
     {
       fprintf(stderr, "out of memory\n");
@@ -950,9 +965,9 @@ int main(int argc, char **argv) {
 
   InitAlwaysUsedWords();
 
-  vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
-  vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
-  expTable = (real *)malloc((EXP_TABLE_SIZE + 1) * sizeof(real));
+  vocab = (struct vocab_word *)calloc_(vocab_max_size, sizeof(struct vocab_word));
+  vocab_hash = (int *)calloc_(vocab_hash_size, sizeof(int));
+  expTable = (real *)malloc_((EXP_TABLE_SIZE + 1) * sizeof(real));
   if (vocab == NULL || vocab_hash == NULL || expTable == NULL) {
     fprintf(stderr, "out of memory\n");
     exit(1);
