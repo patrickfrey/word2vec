@@ -467,7 +467,7 @@ void LearnVocabFromTrainFile() {
     if (feof(fin)) break;
     train_words++;
     if ((debug_mode > 1) && (train_words % 100000 == 0)) {
-      printf("%lldK%c", train_words / 1000, 13);
+      printf("words %lldK\n memory %u\n", train_words / 1000, (unsigned int)(memory_allocated / (1024*1024)));
       fflush(stdout);
     }
     i = SearchVocab(word);
@@ -484,6 +484,7 @@ void LearnVocabFromTrainFile() {
   if (debug_mode > 0) {
     printf("Vocab size: %lld\n", vocab_size);
     printf("Words in train file: %lld\n", train_words);
+    printf("Memory allocated for vocabulary: %u mega bytes\n", (unsigned int)(memory_allocated / (1024 * 1024)));
   }
   file_size = ftell(fin);
   fclose(fin);
