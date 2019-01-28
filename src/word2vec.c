@@ -481,7 +481,7 @@ void LearnVocabFromTrainFile() {
     train_words++;
     if ((debug_mode > 1) && (train_words % 1000000 == 0)) {
 #ifdef __GNUC__
-      printf("words %lld K, memory %u mega bytes\n", train_words / 1000, (unsigned int)(memory_allocated / (1024*1024)));
+      printf("words %lld K, memory %u mega bytes\n", train_words / 1000, (unsigned int)(memory_allocated >> 20));
 #else
       printf("words %lld K\n", train_words / 1000);
 #endif
@@ -502,7 +502,7 @@ void LearnVocabFromTrainFile() {
     printf("Vocab size: %lld\n", vocab_size);
     printf("Words in train file: %lld\n", train_words);
 #ifdef __GNUC__
-    printf("Memory allocated for vocabulary: %u mega bytes\n", (unsigned int)(memory_allocated / (1024 * 1024)));
+    printf("Memory allocated for vocabulary: %u mega bytes\n", (unsigned int)(memory_allocated >> 20));
 #endif
   }
   file_size = ftell(fin);
@@ -543,7 +543,7 @@ void ReadVocab() {
     printf("Vocab size: %lld\n", vocab_size);
     printf("Words in train file: %lld\n", train_words);
 #ifdef __GNUC__
-    printf("Memory allocated for vocabulary: %u mega bytes\n", (unsigned int)(memory_allocated / (1024 * 1024)));
+    printf("Memory allocated for vocabulary: %u mega bytes\n", (unsigned int)(memory_allocated >> 20));
 #endif
   }
   fin = fopen(train_file, "rb");
