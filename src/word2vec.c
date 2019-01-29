@@ -152,7 +152,7 @@ char* word_prefix_use_always[ MAX_STRING_ARRAY] = {0};
 struct vocab_word *vocab;
 int binary = 0, portable = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 5, num_threads = 1, min_reduce = 1;
 int *vocab_hash;
-long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100;
+long long vocab_max_size = 1<<20, vocab_size = 0, layer1_size = 100;
 long long train_words = 0, word_count_actual = 0, file_size = 0, classes = 0;
 real alpha = 0.025, starting_alpha, sample = 0;
 real *syn0, *syn1, *syn1neg, *expTable;
@@ -360,7 +360,7 @@ int AddWordToVocab(char *word) {
   vocab_size++;
   // Reallocate memory if needed
   if (vocab_size + 2 >= vocab_max_size) {
-    vocab_max_size += 1000;
+    vocab_max_size *= 2;
     vocab = (struct vocab_word *)realloc_(vocab, vocab_max_size * sizeof(struct vocab_word));
     if (vocab == NULL)
     {
