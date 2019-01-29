@@ -35,24 +35,24 @@ const int vocab_hash_size = 200*1000*1000;  // Maximum 200 * 0.7 = 140M words in
 size_t memory_allocated = 0;
 void free_( void* ptr)
 {
-	memory_allocated -= malloc_usable_size( ptr);
-	free( ptr);
+  memory_allocated -= malloc_usable_size( ptr);
+  free( ptr);
 }
 void* malloc_( size_t size) {
-	void* ptr = malloc( size);
-	if (ptr) memory_allocated += malloc_usable_size( ptr);
-	return ptr;
+  void* ptr = malloc( size);
+  if (ptr) memory_allocated += malloc_usable_size( ptr);
+  return ptr;
 }
 void* calloc_( size_t memb, size_t size) {
-	void* ptr = calloc( memb, size);
-	if (ptr) memory_allocated += malloc_usable_size( ptr);
-	return ptr;
+  void* ptr = calloc( memb, size);
+  if (ptr) memory_allocated += malloc_usable_size( ptr);
+  return ptr;
 }
 void* realloc_( void* ptr, size_t size) {
-	size_t prevsize = ptr ? malloc_usable_size( ptr) : 0;
-	ptr = realloc( ptr, size);
-	if (ptr) memory_allocated += malloc_usable_size( ptr) - prevsize;
-	return ptr;
+  size_t prevsize = ptr ? malloc_usable_size( ptr) : 0;
+  ptr = realloc( ptr, size);
+  if (ptr) memory_allocated += malloc_usable_size( ptr) - prevsize;
+  return ptr;
 }
 #else
 #define free_ free
@@ -63,70 +63,112 @@ void* realloc_( void* ptr, size_t size) {
 
 typedef struct Dictionary
 {
-	char* mem;
-	size_t memidx;
-	size_t memsize;
+  char* mem;
+  size_t memidx;
+  size_t memsize;
 } Dictionary;
 
 void initDictionary( Dictionary* dict)
 {
-	dict->memsize = 1<<20;
-	dict->mem = malloc( dict->memsize);
-	if (dict->mem == NULL)
-	{
-		fprintf( stderr, "out of memory\n");
-		exit(1);
-	}
-	dict->memidx = 0;
+  dict->memsize = 1<<20;
+  dict->mem = malloc( dict->memsize);
+  if (dict->mem == NULL)
+  {
+    fprintf( stderr, "out of memory\n");
+    exit(1);
+  }
+  dict->memidx = 0;
 }
 
 void swapDictionary( Dictionary* dict1, Dictionary* dict2)
 {
-	Dictionary tmp;
-	memcpy( &tmp, dict1, sizeof(Dictionary));
-	memcpy( dict1, dict2, sizeof(Dictionary));
-	memcpy( dict2, &tmp, sizeof(Dictionary));
+  Dictionary tmp;
+  memcpy( &tmp, dict1, sizeof(Dictionary));
+  memcpy( dict1, dict2, sizeof(Dictionary));
+  memcpy( dict2, &tmp, sizeof(Dictionary));
 }
 
 size_t allocDictionaryHandle( Dictionary* dict, const char* word, size_t size)
 {
-	if (dict->memidx + size + 1 > dict->memsize)
-	{
-		size_t newsize = dict->memsize * 2;
-		while (dict->memidx + size + 1 > newsize)
-		{
-			newsize *= 2;
-		}
-		char* newmem = realloc( dict->mem, newsize);
-		if (newsize < dict->memsize || newmem == NULL)
-		{
-			fprintf( stderr, "out of memory\n");
-			exit(1);
-		}
-		dict->mem = newmem;
-		dict->memsize = newsize;
-	}
-	size_t rt = dict->memidx;
-	memcpy( dict->mem + dict->memidx, word, size);
-	dict->mem[ dict->memidx + size] = 0;
-	dict->memidx += size + 1;
-	return rt;
+  if (dict->memidx + size + 1 > dict->memsize)
+  {
+    size_t newsize = dict->memsize * 2;
+    while (dict->memidx + size + 1 > newsize)
+    {
+      newsize *= 2;
+    }
+    char* newmem = realloc( dict->mem, newsize);
+    if (newsize < dict->memsize || newmem == NULL)
+    {
+      fprintf( stderr, "out of memory\n");
+      exit(1);
+    }
+    dict->mem = newmem;
+    dict->memsize = newsize;
+  }
+  size_t rt = dict->memidx;
+  memcpy( dict->mem + dict->memidx, word, size);
+  dict->mem[ dict->memidx + size] = 0;
+  dict->memidx += size + 1;
+  return rt;
 }
 char* getDictionaryString( Dictionary* dict, long long hnd)
 {
-	return dict->mem + hnd;
+  return dict->mem + hnd;
 }
 void compactDictionary( Dictionary* dict)
 {
-	char* newmem = realloc( dict->mem, dict->memidx);
-	if (newmem) dict->mem = newmem;
+  char* newmem = realloc( dict->mem, dict->memidx);
+  if (newmem) dict->mem = newmem;
 }
 void freeDictionary( Dictionary* dict)
 {
-	free( dict->mem);
-	memset( dict, 0, sizeof( *dict));
+    free_( dict->mem);
+  memset( dict, 0, sizeof( *dict));
 }
 static Dictionary dictionary;
+
+
+typedef struct BlockMem
+{
+  void* mem;
+  size_t elemsize;
+  size_t memsize;
+} BlockMem;
+
+void initBlockMem( BlockMem* bm, size_t nmemb, size_t size)
+{
+  bm->mem = calloc_( nmemb, size);
+  if (bm->mem == NULL)
+  {
+    fprintf( stderr, "out of memory\n");
+    exit(1);
+  }
+  bm->elemsize = size;
+  bm->memsize = nmemb * size;
+}
+
+void freeBlockMem( BlockMem* bm)
+{
+  free_( bm->mem);
+  bm->mem = NULL;
+  bm->elemsize = 0;
+  bm->memsize = 0;
+}
+
+void* getBlockMemElement( BlockMem* bm, size_t idx)
+{
+  size_t ofs = idx * bm->elemsize;
+  if (ofs >= bm->memsize)
+  {
+    fprintf( stderr, "array bound read\n");
+    exit(1);
+  }
+  return (char*)bm->mem + ofs;
+}
+
+static BlockMem blockMem_code;
+static BlockMem blockMem_point;
 
 
 #undef USE_DOUBLE_PRECISION_FLOAT
@@ -380,17 +422,7 @@ int VocabCompare(const void *a, const void *b) {
 }
 
 void DestroyVocab() {
-  int a;
-
-  for (a = 0; a < vocab_size; a++) {
-    if (vocab[a].code != NULL) {
-      free(vocab[a].code);
-    }
-    if (vocab[a].point != NULL) {
-      free(vocab[a].point);
-    }
-  }
-  free(vocab);
+  free_(vocab);
 }
 
 // Sorts the vocabulary by frequency using word counts
@@ -435,16 +467,19 @@ void SortVocab() {
   swapDictionary( &dictionary, &new_dictionary);
   freeDictionary( &new_dictionary);
 
+  initBlockMem( &blockMem_code, vocab_size, MAX_CODE_LENGTH * sizeof(char));
+  initBlockMem( &blockMem_point, vocab_size, MAX_CODE_LENGTH * sizeof(int));
+
   // Allocate memory for the binary tree construction
   for (a = 0; a < vocab_size; a++) {
-    vocab[a].code = (char *)calloc_(MAX_CODE_LENGTH, sizeof(char));
-    vocab[a].point = (int *)calloc_(MAX_CODE_LENGTH, sizeof(int));
-    if (vocab[a].code == NULL || vocab[a].point == NULL)
-    {
-      fprintf(stderr, "out of memory\n");
-      exit(1);
-    }
+    vocab[a].code = (char*)getBlockMemElement( &blockMem_code, a);
+    vocab[a].point = (int*)getBlockMemElement( &blockMem_point, a);;
   }
+#ifdef __GNUC__
+  if (debug_mode > 1) {
+    printf("memory allocated %u mega bytes\n", (unsigned int)(memory_allocated >> 20));
+  }
+#endif
 }
 
 // Create binary Huffman tree using the word counts
@@ -514,9 +549,9 @@ void CreateBinaryTree() {
       vocab[a].point[i - b] = point[b] - vocab_size;
     }
   }
-  free(count);
-  free(binary);
-  free(parent_node);
+  free_(count);
+  free_(binary);
+  free_(parent_node);
 }
 
 void LearnVocabFromTrainFile() {
@@ -637,13 +672,13 @@ void InitNet() {
 
 void DestroyNet() {
   if (syn0 != NULL) {
-    free(syn0);
+    free_(syn0);
   }
   if (syn1 != NULL) {
-    free(syn1);
+    free_(syn1);
   }
   if (syn1neg != NULL) {
-    free(syn1neg);
+    free_(syn1neg);
   }
 }
 
@@ -820,8 +855,8 @@ void *TrainModelThread(void *id) {
     }
   }
   fclose(fi);
-  free(neu1);
-  free(neu1e);
+  free_(neu1);
+  free_(neu1e);
   pthread_exit(NULL);
 }
 
@@ -926,13 +961,13 @@ void TrainModel() {
     }
     // Save the K-means classes
     for (a = 0; a < vocab_size; a++) fprintf(fo, "%s %d\n", getDictionaryString( &dictionary, vocab[a].wordhnd), cl[a]);
-    free(centcn);
-    free(cent);
-    free(cl);
+    free_(centcn);
+    free_(cent);
+    free_(cl);
   }
   fclose(fo);
-  free(table);
-  free(pt);
+    free_(table);
+    free_(pt);
   DestroyVocab();
 }
 
@@ -1033,8 +1068,11 @@ int main(int argc, char **argv) {
   }
   TrainModel();
   DestroyNet();
-  free(vocab_hash);
-  free(expTable);
+    free_(vocab_hash);
+    free_(expTable);
   freeDictionary( &dictionary);
+  freeBlockMem( &blockMem_code);
+  freeBlockMem( &blockMem_point);
+
   return 0;
 }
