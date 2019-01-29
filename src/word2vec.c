@@ -61,6 +61,74 @@ void* realloc_( void* ptr, int size) {
 #define realloc_ realloc
 #endif
 
+typedef struct Dictionary
+{
+	char* mem;
+	size_t memidx;
+	size_t memsize;
+} Dictionary;
+
+void initDictionary( Dictionary* dict)
+{
+	dict->memsize = 1<<20;
+	dict->mem = malloc( dict->memsize);
+	if (dict->mem == NULL)
+	{
+		fprintf( stderr, "out of memory\n");
+		exit(1);
+	}
+	dict->memidx = 0;
+}
+
+void swapDictionary( Dictionary* dict1, Dictionary* dict2)
+{
+	Dictionary tmp;
+	memcpy( &tmp, dict1, sizeof(Dictionary));
+	memcpy( dict1, dict2, sizeof(Dictionary));
+	memcpy( dict2, &tmp, sizeof(Dictionary));
+}
+
+size_t allocDictionaryHandle( Dictionary* dict, const char* word, size_t size)
+{
+	if (dict->memidx + size + 1 > dict->memsize)
+	{
+		size_t newsize = dict->memsize * 2;
+		while (dict->memidx + size + 1 > newsize)
+		{
+			newsize *= 2;
+		}
+		char* newmem = realloc( dict->mem, newsize);
+		if (newsize < dict->memsize || newmem == NULL)
+		{
+			fprintf( stderr, "out of memory\n");
+			exit(1);
+		}
+		dict->mem = newmem;
+		dict->memsize = newsize;
+	}
+	size_t rt = dict->memidx;
+	memcpy( dict->mem + dict->memidx, word, size);
+	dict->mem[ dict->memidx + size] = 0;
+	dict->memidx += size + 1;
+	return rt;
+}
+char* getDictionaryString( Dictionary* dict, long long hnd)
+{
+	return dict->mem + hnd;
+}
+void compactDictionary( Dictionary* dict)
+{
+	char* newmem = realloc( dict->mem, dict->memidx);
+	if (newmem) dict->mem = newmem;
+}
+void freeDictionary( Dictionary* dict)
+{
+	free( dict->mem);
+	memset( dict, 0, sizeof( *dict));
+}
+static Dictionary dictionary;
+
+
 #undef USE_DOUBLE_PRECISION_FLOAT
 #ifdef USE_DOUBLE_PRECISION_FLOAT
 typedef double real;                   // Precision of float numbers
@@ -73,7 +141,8 @@ typedef uint32_t real_net_t;
 struct vocab_word {
   long long cn;
   int *point;
-  char *word, *code, codelen;
+  size_t wordhnd;
+  char *code, codelen;
 };
 
 char train_file[MAX_STRING], output_file[MAX_STRING];
@@ -199,6 +268,20 @@ void InitAlwaysUsedWords()
   }
 }
 
+static int doUseAlways( char const* word)
+{
+  char** ai = word_prefix_use_always;
+  for (; *ai; ++ai) {
+    int pi = 0;
+    for (; (*ai)[pi] && word[pi] && (*ai)[pi] == word[pi]; ++pi){}
+    if (!(*ai)[pi]) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+
 void InitUnigramTable() {
   int a, i;
   long long train_words_pow = 0;
@@ -245,7 +328,7 @@ void ReadWord(char *word, FILE *fin) {
 }
 
 // Returns hash value of a word
-int GetWordHash( char *word) {
+int GetWordHash( const char *word) {
   return sdbm_hash( word) % vocab_hash_size;
 }
 
@@ -254,7 +337,7 @@ int SearchVocab(char *word) {
   unsigned int hash = GetWordHash(word);
   while (1) {
     if (vocab_hash[hash] == -1) return -1;
-    if (!strcmp(word, vocab[vocab_hash[hash]].word)) return vocab_hash[hash];
+    if (!strcmp(word, getDictionaryString( &dictionary, vocab[vocab_hash[hash]].wordhnd))) return vocab_hash[hash];
     hash = (hash + 1) % vocab_hash_size;
   }
   return -1;
@@ -272,13 +355,7 @@ int ReadWordIndex(FILE *fin) {
 int AddWordToVocab(char *word) {
   unsigned int hash, length = strlen(word);
   if (length >= MAX_STRING) length = MAX_STRING-1;
-  if ((vocab[vocab_size].word = (char *)malloc_( length+1)) == NULL)
-  {
-      fprintf(stderr, "out of memory\n");
-      exit(1);
-  }
-  memcpy(vocab[vocab_size].word, word, length);
-  vocab[vocab_size].word[ length] = 0;
+  vocab[vocab_size].wordhnd = allocDictionaryHandle( &dictionary, word, length);
   vocab[vocab_size].cn = 0;
   vocab_size++;
   // Reallocate memory if needed
@@ -306,9 +383,6 @@ void DestroyVocab() {
   int a;
 
   for (a = 0; a < vocab_size; a++) {
-    if (vocab[a].word != NULL) {
-      free(vocab[a].word);
-    }
     if (vocab[a].code != NULL) {
       free(vocab[a].code);
     }
@@ -316,51 +390,51 @@ void DestroyVocab() {
       free(vocab[a].point);
     }
   }
-  free(vocab[vocab_size].word);
   free(vocab);
 }
 
 // Sorts the vocabulary by frequency using word counts
 void SortVocab() {
-  int a, size;
+  int a, size, new_a;
   unsigned int hash;
   // Sort the vocabulary and keep </s> at the first position
   qsort(&vocab[1], vocab_size - 1, sizeof(struct vocab_word), VocabCompare);
   for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
   size = vocab_size;
   train_words = 0;
-  for (a = 1; a < size; a++) { // Skip </s>
+  Dictionary new_dictionary;
+  initDictionary( &new_dictionary);
+
+  for (new_a = 1, a = 1; a < size; a++) { // Skip </s>
     // Words with a prefix marked as '--always' will always be used
-    int useAlways = 0;
-    char** ai = word_prefix_use_always;
-    const char* word = vocab[a].word;
-    for (; *ai; ++ai) {
-      int pi = 0;
-      for (; (*ai)[pi] && word[pi] && (*ai)[pi] == word[pi]; ++pi){}
-      if (!(*ai)[pi]) {
-        useAlways = 1;
-        break;
-      }
-    }
+    const char* word = getDictionaryString( &dictionary, vocab[a].wordhnd);
+    int useAlways = doUseAlways( word);
+
     // Words occuring less than min_count times will be discarded from the vocab
-    if (vocab[a].cn < min_count && !useAlways) {
-      vocab_size--;
-      free(vocab[a].word);
-      vocab[a].word = NULL;
-    } else {
+    if (vocab[a].cn >= min_count || useAlways) {
+      vocab[ new_a].cn = vocab[ a].cn;
+      vocab[ new_a].wordhnd = allocDictionaryHandle( &new_dictionary, word, strlen(word));
       // Hash will be re-computed, as after the sorting it is not actual
-      hash=GetWordHash(vocab[a].word);
+      hash=GetWordHash( word);
       while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
-      vocab_hash[hash] = a;
-      train_words += vocab[a].cn;
+      vocab_hash[ hash] = new_a;
+      train_words += vocab[ new_a].cn;
+      ++new_a;
     }
   }
+  vocab_size = new_a;
   vocab = (struct vocab_word *)realloc_( vocab, (vocab_size + 1) * sizeof(struct vocab_word));
   if (vocab == NULL)
   {
     fprintf(stderr, "out of memory\n");
     exit(1);
   }
+  memset( vocab + vocab_size, 0, sizeof( struct vocab_word));
+  // ... no clue what this additional element allocated (realloc above) is used for. we are just nulling it, just in case
+
+  swapDictionary( &dictionary, &new_dictionary);
+  freeDictionary( &new_dictionary);
+
   // Allocate memory for the binary tree construction
   for (a = 0; a < vocab_size; a++) {
     vocab[a].code = (char *)calloc_(MAX_CODE_LENGTH, sizeof(char));
@@ -371,27 +445,6 @@ void SortVocab() {
       exit(1);
     }
   }
-}
-
-// Reduces the vocabulary by removing infrequent tokens
-void ReduceVocab() {
-  int a, b = 0;
-  unsigned int hash;
-  for (a = 0; a < vocab_size; a++) if (vocab[a].cn > min_reduce) {
-    vocab[b].cn = vocab[a].cn;
-    vocab[b].word = vocab[a].word;
-    b++;
-  } else free(vocab[a].word);
-  vocab_size = b;
-  for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
-  for (a = 0; a < vocab_size; a++) {
-    // Hash will be re-computed, as it is not actual
-    hash = GetWordHash(vocab[a].word);
-    while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
-    vocab_hash[hash] = a;
-  }
-  fflush(stdout);
-  min_reduce++;
 }
 
 // Create binary Huffman tree using the word counts
@@ -501,6 +554,7 @@ void LearnVocabFromTrainFile() {
     }
   }
   SortVocab();
+  compactDictionary( &dictionary);
   if (debug_mode > 0) {
     printf("Vocab size: %lld\n", vocab_size);
     printf("Words in train file: %lld\n", train_words);
@@ -518,7 +572,7 @@ void SaveVocab() {
   if (fo == NULL) {
      printf("ERROR: cannot open vocab file: %s\n", strerror(errno));
   } else {
-    for (i = 0; i < vocab_size; i++) fprintf(fo, "%s %lld\n", vocab[i].word, vocab[i].cn);
+    for (i = 0; i < vocab_size; i++) fprintf(fo, "%s %lld\n", getDictionaryString( &dictionary, vocab[i].wordhnd), vocab[i].cn);
     fclose(fo);
   }
 }
@@ -542,6 +596,7 @@ void ReadVocab() {
     i++;
   }
   SortVocab();
+  compactDictionary( &dictionary);
   if (debug_mode > 0) {
     printf("Vocab size: %lld\n", vocab_size);
     printf("Words in train file: %lld\n", train_words);
@@ -797,9 +852,7 @@ void TrainModel() {
     // Save the word vectors
     fprintf(fo, "%lld %lld\n", vocab_size, layer1_size);
     for (a = 0; a < vocab_size; a++) {
-      if (vocab[a].word != NULL) {
-        fprintf(fo, "%s ", vocab[a].word);
-      }
+      fprintf(fo, "%s ", getDictionaryString( &dictionary, vocab[a].wordhnd));
       if (binary) {
         if (portable) {
           for (b = 0; b < layer1_size; b++) {
@@ -872,7 +925,7 @@ void TrainModel() {
       }
     }
     // Save the K-means classes
-    for (a = 0; a < vocab_size; a++) fprintf(fo, "%s %d\n", vocab[a].word, cl[a]);
+    for (a = 0; a < vocab_size; a++) fprintf(fo, "%s %d\n", getDictionaryString( &dictionary, vocab[a].wordhnd), cl[a]);
     free(centcn);
     free(cent);
     free(cl);
@@ -942,6 +995,7 @@ int main(int argc, char **argv) {
     printf("./word2vec -train data.txt -output vec.txt -debug 2 -size 200 -window 5 -sample 1e-4 -negative 5 -hs 0 -binary 0 -cbow 1\n\n");
     return 0;
   }
+  initDictionary( &dictionary);
   output_file[0] = 0;
   save_vocab_file[0] = 0;
   read_vocab_file[0] = 0;
@@ -981,5 +1035,6 @@ int main(int argc, char **argv) {
   DestroyNet();
   free(vocab_hash);
   free(expTable);
+  freeDictionary( &dictionary);
   return 0;
 }
