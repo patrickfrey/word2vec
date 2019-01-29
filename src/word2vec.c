@@ -32,24 +32,24 @@
 const int vocab_hash_size = 200*1000*1000;  // Maximum 200 * 0.7 = 140M words in the vocabulary
 
 #ifdef __GNUC__
-long long memory_allocated = 0;
+size_t memory_allocated = 0;
 void free_( void* ptr)
 {
 	memory_allocated -= malloc_usable_size( ptr);
 	free( ptr);
 }
-void* malloc_( int size) {
+void* malloc_( size_t size) {
 	void* ptr = malloc( size);
 	if (ptr) memory_allocated += malloc_usable_size( ptr);
 	return ptr;
 }
-void* calloc_( int memb, int size) {
+void* calloc_( size_t memb, size_t size) {
 	void* ptr = calloc( memb, size);
 	if (ptr) memory_allocated += malloc_usable_size( ptr);
 	return ptr;
 }
-void* realloc_( void* ptr, int size) {
-	int prevsize = ptr ? malloc_usable_size( ptr) : 0;
+void* realloc_( void* ptr, size_t size) {
+	size_t prevsize = ptr ? malloc_usable_size( ptr) : 0;
 	ptr = realloc( ptr, size);
 	if (ptr) memory_allocated += malloc_usable_size( ptr) - prevsize;
 	return ptr;
