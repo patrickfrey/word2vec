@@ -21,7 +21,11 @@
 #include <stdint.h>
 #include <errno.h>
 #include <malloc.h>
+#include <unistd.h>
+#include <fcntl.h>
 
+#define MIN_FILEBLOCK_CACHESIZE 1024
+#define KNUTH_HASH 2654435761
 #define MAX_STRING_ARRAY 10
 #define MAX_STRING 100
 #define EXP_TABLE_SIZE 1000
@@ -68,7 +72,7 @@ typedef struct Dictionary
   size_t memsize;
 } Dictionary;
 
-void initDictionary( Dictionary* dict)
+static void initDictionary( Dictionary* dict)
 {
   dict->memsize = 1<<20;
   dict->mem = malloc( dict->memsize);
@@ -80,7 +84,7 @@ void initDictionary( Dictionary* dict)
   dict->memidx = 0;
 }
 
-void swapDictionary( Dictionary* dict1, Dictionary* dict2)
+static void swapDictionary( Dictionary* dict1, Dictionary* dict2)
 {
   Dictionary tmp;
   memcpy( &tmp, dict1, sizeof(Dictionary));
@@ -88,7 +92,7 @@ void swapDictionary( Dictionary* dict1, Dictionary* dict2)
   memcpy( dict2, &tmp, sizeof(Dictionary));
 }
 
-size_t allocDictionaryHandle( Dictionary* dict, const char* word, size_t size)
+static size_t allocDictionaryHandle( Dictionary* dict, const char* word, size_t size)
 {
   if (dict->memidx + size + 1 > dict->memsize)
   {
@@ -112,16 +116,16 @@ size_t allocDictionaryHandle( Dictionary* dict, const char* word, size_t size)
   dict->memidx += size + 1;
   return rt;
 }
-char* getDictionaryString( Dictionary* dict, long long hnd)
+static char* getDictionaryString( Dictionary* dict, long long hnd)
 {
   return dict->mem + hnd;
 }
-void compactDictionary( Dictionary* dict)
+static void compactDictionary( Dictionary* dict)
 {
   char* newmem = realloc( dict->mem, dict->memidx);
   if (newmem) dict->mem = newmem;
 }
-void freeDictionary( Dictionary* dict)
+static void freeDictionary( Dictionary* dict)
 {
     free_( dict->mem);
   memset( dict, 0, sizeof( *dict));
@@ -132,23 +136,33 @@ static Dictionary dictionary;
 typedef struct BlockMem
 {
   void* mem;
+  size_t alignment;
+  size_t alignofs;
   size_t elemsize;
   size_t memsize;
 } BlockMem;
 
-void initBlockMem( BlockMem* bm, size_t nmemb, size_t size)
+static void initBlockMem( BlockMem* bm, size_t nmemb, size_t size, size_t alignment)
 {
-  bm->mem = calloc_( nmemb, size);
+  bm->mem = malloc_( nmemb * size + (alignment?alignment:0));
   if (bm->mem == NULL)
   {
     fprintf( stderr, "out of memory\n");
     exit(1);
   }
+  bm->alignment = alignment;
+  bm->alignofs = 0;
+  if (alignment != 0)
+  {
+    size_t adridx = (size_t)bm->mem;
+    while (adridx % alignment != 0) ++adridx;
+    bm->alignofs = adridx;
+  }
   bm->elemsize = size;
-  bm->memsize = nmemb * size;
+  bm->memsize = nmemb * size + alignment;
 }
 
-void freeBlockMem( BlockMem* bm)
+static void freeBlockMem( BlockMem* bm)
 {
   free_( bm->mem);
   bm->mem = NULL;
@@ -156,20 +170,221 @@ void freeBlockMem( BlockMem* bm)
   bm->memsize = 0;
 }
 
-void* getBlockMemElement( BlockMem* bm, size_t idx)
+static void* getBlockMemElement( BlockMem* bm, size_t idx)
 {
-  size_t ofs = idx * bm->elemsize;
-  if (ofs >= bm->memsize)
+  size_t ofs = (idx+1) * bm->elemsize + bm->alignofs;
+  if (ofs > bm->memsize)
   {
     fprintf( stderr, "array bound read\n");
     exit(1);
   }
-  return (char*)bm->mem + ofs;
+  return (void*)((char*)bm->mem + ofs - bm->elemsize);
 }
 
 static BlockMem blockMem_code;
 static BlockMem blockMem_point;
 
+typedef struct FileMappedBlockDescr
+{
+  int memidx;
+  int lastused;
+} FileMappedBlockDescr;
+
+typedef struct FileMappedBlockMem
+{
+  BlockMem mem;
+  unsigned int* memfreelist;
+  unsigned int memfreelistsize;
+  FileMappedBlockDescr* descrar;
+  ssize_t descrarsize;
+  ssize_t* hashtab;
+  unsigned int hashtabsize;
+  unsigned int hashfillsize;
+  int filedesc;
+} FileMappedBlockMem;
+
+static unsigned int hash_uint( unsigned int a)
+{
+   a = (a+0x7ed55d16) + (a<<12);
+   a = (a^0xc761c23c) ^ (a>>19);
+   a = (a+0x165667b1) + (a<<5);
+   a = (a+0xd3a2646c) ^ (a<<9);
+   a = (a+0xfd7046c5) + (a<<3);
+   a = (a^0xb55a4f09) ^ (a>>16);
+   return a;
+}
+
+static unsigned int hash_size( size_t a)
+{
+  return hash_uint( (a * KNUTH_HASH) + (a >> 32));
+}
+
+static void createFileMappedBlockMem( const char* filename, size_t nmemb, size_t blocksize, const void* nullblock) {
+  int filedesc = open( filenmame, O_RDWR | O_TRUNC | O_CREAT, S_IRUSR | S_IWUSR);
+  if (!filedesc) {
+    fprintf( stderr, "failed to open memory block map file '%s': %s", filename, strerror( errno));
+    exit(1);
+  }
+  size_t ii=0;
+  for (; ii<nmemb; ++ii) {
+    if (write( filedesc, nullblock, blocksize) != blocksize) {
+      fprintf( stderr, "failed to initialize block map file '%s': %s", filename, strerror( errno));
+      close( filedesc);
+      exit(1);
+    }
+  }
+  close( filedesc);
+}
+
+static void initFileMappedBlockMem( FileMappedBlockMem* fb, const char* filename, size_t nmemb, size_t blocksize, unsigned int cachesize) {
+  unsigned int hi = 0;
+  size_t bi = 0;
+  if (cachesize < MIN_FILEBLOCK_CACHESIZE)
+  {
+    fprintf( stderr, "specified size of file map block cache to small");
+    exit(1);
+  }
+  initBlockMem( &fb->mem, cachesize, blocksize);
+  fb->descrar = (FileMappedBlockDescr*)malloc_( (size_t)nmemb * sizeof(FileMappedBlockDescr));
+  fb->hashtab = (ssize_t*)malloc_( (size_t)cachesize * sizeof(ssize_t));
+  fb->memfreelist = (unsigned int*)malloc_( (size_t)cachesize * sizeof(unsigned int));
+  if (fb->hashtab == NULL || fb->descrar == NULL)
+  {
+    fprintf( stderr, "out of memory\n");
+    exit(1);
+  }
+  for (; hi < cachesize; ++hi) {
+    fb->hashtab[ hi] = -1;
+    fb->memfreelist[ cachesize-hi-1] = hi;
+  }
+  for (; bi < nmemb; ++bi) {
+    fb->descrar[ bi].memidx = -1;
+    fb->descrar[ bi].lastused = -1;
+  }
+  fb->descrarsize = nmemb;
+  fb->memfreelistsize = cachesize;
+  fb->hashtabsize = cachesize;
+  fb->hashfillsize = 0;
+
+  fb->filedesc = open( filenmame, O_RDWR);
+  if (!fb->filedesc) {
+    fprintf( stderr, "failed to open memory block map file '%s': %s", filename, strerror( errno));
+    exit(1);
+  }
+}
+
+static void freeFileMappedBlockMem( FileMappedBlockMem* fb)
+{
+  freeBlockMem( &fb->mem);
+  free( fb->descrar);
+  free( fb->hashtab);
+  close( fb->filedesc);
+}
+
+static void writeBackFileMappedBlock( FileMappedBlockMem* fb, ssize_t index)
+{
+  if (index < 0 || fb->descrar[ index].memidx < 0 || index >= fb->descrarsize)
+  {
+    fprintf( stderr, "illegal mem block access");
+    exit(1);
+  }
+  const void* memblk = getBlockMemElement( &fb->mem, fb->descrar[ index].memidx);
+  if (lseek( fb->filedesc, index * fb->mem.elemsize, SEEK_SET) < 0) {
+    fprintf( stderr, "failed seek in map file: %s", strerror( errno));
+    exit(1);
+  }
+  if (write( fb->filedesc, memblk, fb->mem.elemsize) != fb->mem.elemsize) {
+    fprintf( stderr, "failed to write block in map file: %s", strerror( errno));
+    exit(1);
+  }
+}
+
+static int getFileMappedBlockMem_lastused_gc_estimate( FileMappedBlockMem* fb, int lastused)
+{
+  unsigned int hi = (unsigned int)(lastused * KNUTH_HASH) % fb->hashtabsize;
+  unsigned int ci = 0;
+  for (; ci < 3; hi=((hi+1) == fb->hashtabsize) ? 0 : (hi+1)) {
+    ssize_t idx = fb->hashtab[ hi];
+    if (idx != -1) {
+      int lu = fb->descrar[ idx].lastused;
+      if (lu < lastused) lastused = lu;
+      ++ci;
+    }
+  }
+  return lastused;
+}
+
+static void gcFileMappedBlock( FileMappedBlockMem* fb, unsigned int currtime)
+{
+  unsigned int lastused = getFileMappedBlockMem_lastused_gc_estimate( fb, currtime);
+  unsigned int nofGc = 0;
+  unsigned int hi = 0, he = fb->hashtabsize;
+  for (; hi != he && fb->memfreelistsize < fb->hashtabsize; ++hi) {
+     ssize_t idx = fb->hashtab[ hi];
+     if (idx != -1) {
+       if (fb->descrar[ idx].memidx >= 0 && fb->descrar[ idx].lastused <= lastused)
+       {
+         writeBackFileMappedBlock( fb, idx);
+         fb->memfreelist[ fb->memfreelistsize++] = fb->descrar[ idx].memidx;
+         fb->descrar[ idx].memidx = -1;
+         fb->descrar[ idx].lastused = -1;
+         fb->hashtab[ hi] = -1;
+       }
+     }
+  }
+  ssize_t* newhashtab = (size_t*)malloc_( fb->hashtabsize * sizeof(size_t));
+  if (newhashtab == NULL) {
+    fprintf(stderr, "out of memory\n");
+    exit(1);
+  }
+  for (hi = 0; hi < fb->hashtabsize; ++hi) {
+    newhashtab[ hi] = -1;
+  }
+  for (hi = 0; hi < fb->hashtabsize; ++hi) {
+    ssize_t idx = fb->hashtab[ hi];
+    if (idx >= 0) {
+      newhashtab[ hi] = hash_size( idx);
+    }
+  }
+  free_( fb->hashtab);
+  fb->hashtab = newhashtab;
+}
+
+static void loadFileMappedBlock( FileMappedBlockMem* fb, ssize_t index, unsigned int currtime)
+{
+  if (index < 0 || index >= fb->descrarsize)
+  {
+    fprintf( stderr, "illegal mem block access");
+    exit(1);
+  }
+  if (fb->descrar[ index].memidx < 0)
+  {
+    while (fb->memfreelistsize == 0)
+    {
+      gcFileMappedBlock( fb, currtime);
+      if (fb->memfreelistsize == 0)
+      {
+        fprintf( stderr, "garbagge collector exception");
+        exit(1);
+      }
+    }
+    int memidx = fb->memfreelist[ fb->memfreelistsize-1];
+    !!!!!! HIE WIIITER
+	    void* memblk = getBlockMemElement( &fb->mem, fb->descrar[ index].memidx);
+	      if (lseek( fb->filedesc, index * fb->mem.elemsize, SEEK_SET) < 0) {
+		fprintf( stderr, "failed seek in map file: %s", strerror( errno));
+		exit(1);
+	      }
+	      if (READ( fb->filedesc, memblk, fb->mem.elemsize) != fb->mem.elemsize) {
+		fprintf( stderr, "failed to write block in map file: %s", strerror( errno));
+		exit(1);
+	      }
+  }
+}
+
+void* getFileMappedBlock( FileMappedBlockMem* fb)
+{
+}
 
 #undef USE_DOUBLE_PRECISION_FLOAT
 #ifdef USE_DOUBLE_PRECISION_FLOAT
@@ -467,8 +682,8 @@ void SortVocab() {
   swapDictionary( &dictionary, &new_dictionary);
   freeDictionary( &new_dictionary);
 
-  initBlockMem( &blockMem_code, vocab_size, MAX_CODE_LENGTH * sizeof(char));
-  initBlockMem( &blockMem_point, vocab_size, MAX_CODE_LENGTH * sizeof(int));
+  initBlockMem( &blockMem_code, vocab_size, MAX_CODE_LENGTH * sizeof(char), 0/*default alignment*/);
+  initBlockMem( &blockMem_point, vocab_size, MAX_CODE_LENGTH * sizeof(int), 0/*default alignment*/);
 
   // Allocate memory for the binary tree construction
   for (a = 0; a < vocab_size; a++) {
