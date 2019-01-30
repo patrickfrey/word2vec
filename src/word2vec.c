@@ -21,6 +21,7 @@
 #include <stdint.h>
 #include <errno.h>
 #include <malloc.h>
+#include <limits.h>
 
 #define MAX_STRING_ARRAY 10
 #define MAX_STRING 100
@@ -522,9 +523,9 @@ void SortVocab() {
 void CreateBinaryTree() {
   long long a, b, i, min1i, min2i, pos1, pos2, point[MAX_CODE_LENGTH];
   char code[MAX_CODE_LENGTH];
-  long long *count = (long long *)calloc_(vocab_size * 2 + 1, sizeof(long long));
-  long long *binary = (long long *)calloc_(vocab_size * 2 + 1, sizeof(long long));
-  long long *parent_node = (long long *)calloc_(vocab_size * 2 + 1, sizeof(long long));
+  unsigned int *count = (unsigned int *)calloc_(vocab_size * 2 + 1, sizeof(unsigned int));
+  unsigned char *binary = (unsigned char *)calloc_(vocab_size * 2 + 1, sizeof(unsigned char));
+  int *parent_node = (int *)calloc_(vocab_size * 2 + 1, sizeof(int));
   size_t* code_hnd = (size_t*)calloc_( vocab_size, sizeof(size_t));
   size_t* point_hnd = (size_t*)calloc_( vocab_size, sizeof(size_t));
 
@@ -534,7 +535,7 @@ void CreateBinaryTree() {
     exit(1);
   }
   for (a = 0; a < vocab_size; a++) count[a] = vocab[a].cn;
-  for (a = vocab_size; a < vocab_size * 2; a++) count[a] = 1e15;
+  for (a = 0; a < vocab_size; a++) count[a + vocab_size] = UINT_MAX;
   pos1 = vocab_size - 1;
   pos2 = vocab_size;
   // Following algorithm constructs the Huffman tree by adding one node at a time
@@ -564,7 +565,9 @@ void CreateBinaryTree() {
       min2i = pos2;
       pos2++;
     }
-    count[vocab_size + a] = count[min1i] + count[min2i];
+    unsigned long long tcount = (unsigned long long)count[min1i] + (unsigned long long)count[min2i];
+    if (tcount > UINT_MAX) tcount = UINT_MAX;
+    count[vocab_size + a] = tcount;
     parent_node[min1i] = vocab_size + a;
     parent_node[min2i] = vocab_size + a;
     binary[min2i] = 1;
