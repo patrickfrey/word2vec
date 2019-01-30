@@ -68,7 +68,7 @@ typedef struct Dictionary
   size_t memsize;
 } Dictionary;
 
-void initDictionary( Dictionary* dict)
+static void initDictionary( Dictionary* dict)
 {
   dict->memsize = 1<<20;
   dict->mem = malloc( dict->memsize);
@@ -80,7 +80,7 @@ void initDictionary( Dictionary* dict)
   dict->memidx = 0;
 }
 
-void swapDictionary( Dictionary* dict1, Dictionary* dict2)
+static void swapDictionary( Dictionary* dict1, Dictionary* dict2)
 {
   Dictionary tmp;
   memcpy( &tmp, dict1, sizeof(Dictionary));
@@ -88,7 +88,7 @@ void swapDictionary( Dictionary* dict1, Dictionary* dict2)
   memcpy( dict2, &tmp, sizeof(Dictionary));
 }
 
-size_t allocDictionaryHandle( Dictionary* dict, const char* word, size_t size)
+static size_t allocDictionaryHandle( Dictionary* dict, const char* word, size_t size)
 {
   if (dict->memidx + size + 1 > dict->memsize)
   {
@@ -112,16 +112,16 @@ size_t allocDictionaryHandle( Dictionary* dict, const char* word, size_t size)
   dict->memidx += size + 1;
   return rt;
 }
-char* getDictionaryString( Dictionary* dict, long long hnd)
+static char* getDictionaryString( Dictionary* dict, long long hnd)
 {
   return dict->mem + hnd;
 }
-void compactDictionary( Dictionary* dict)
+static void compactDictionary( Dictionary* dict)
 {
   char* newmem = realloc( dict->mem, dict->memidx);
   if (newmem) dict->mem = newmem;
 }
-void freeDictionary( Dictionary* dict)
+static void freeDictionary( Dictionary* dict)
 {
     free_( dict->mem);
   memset( dict, 0, sizeof( *dict));
@@ -132,23 +132,33 @@ static Dictionary dictionary;
 typedef struct BlockMem
 {
   void* mem;
+  size_t alignment;
+  size_t alignofs;
   size_t elemsize;
   size_t memsize;
 } BlockMem;
 
-void initBlockMem( BlockMem* bm, size_t nmemb, size_t size)
+static void initBlockMem( BlockMem* bm, size_t nmemb, size_t size, size_t alignment)
 {
-  bm->mem = calloc_( nmemb, size);
+  bm->mem = malloc_( nmemb * size + (alignment?alignment:0));
   if (bm->mem == NULL)
   {
     fprintf( stderr, "out of memory\n");
     exit(1);
   }
+  bm->alignment = alignment;
+  bm->alignofs = 0;
+  if (alignment != 0)
+  {
+    size_t adridx = (size_t)bm->mem;
+    while (adridx % alignment != 0) ++adridx;
+    bm->alignofs = adridx;
+  }
   bm->elemsize = size;
-  bm->memsize = nmemb * size;
+  bm->memsize = nmemb * size + alignment;
 }
 
-void freeBlockMem( BlockMem* bm)
+static void freeBlockMem( BlockMem* bm)
 {
   free_( bm->mem);
   bm->mem = NULL;
@@ -156,15 +166,15 @@ void freeBlockMem( BlockMem* bm)
   bm->memsize = 0;
 }
 
-void* getBlockMemElement( BlockMem* bm, size_t idx)
+static void* getBlockMemElement( BlockMem* bm, size_t idx)
 {
-  size_t ofs = idx * bm->elemsize;
-  if (ofs >= bm->memsize)
+  size_t ofs = (idx+1) * bm->elemsize + bm->alignofs;
+  if (ofs > bm->memsize)
   {
     fprintf( stderr, "array bound read\n");
     exit(1);
   }
-  return (char*)bm->mem + ofs;
+  return (void*)((char*)bm->mem + ofs - bm->elemsize);
 }
 
 static BlockMem blockMem_code;
@@ -467,8 +477,8 @@ void SortVocab() {
   swapDictionary( &dictionary, &new_dictionary);
   freeDictionary( &new_dictionary);
 
-  initBlockMem( &blockMem_code, vocab_size, MAX_CODE_LENGTH * sizeof(char));
-  initBlockMem( &blockMem_point, vocab_size, MAX_CODE_LENGTH * sizeof(int));
+  initBlockMem( &blockMem_code, vocab_size, MAX_CODE_LENGTH * sizeof(char), 0/*default alignment*/);
+  initBlockMem( &blockMem_point, vocab_size, MAX_CODE_LENGTH * sizeof(int), 0/*default alignment*/);
 
   // Allocate memory for the binary tree construction
   for (a = 0; a < vocab_size; a++) {
