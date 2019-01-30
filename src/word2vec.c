@@ -61,14 +61,14 @@ void* realloc_( void* ptr, size_t size) {
 #define realloc_ realloc
 #endif
 
-typedef struct Dictionary
+typedef struct Allocator
 {
   char* mem;
   size_t memidx;
   size_t memsize;
-} Dictionary;
+} Allocator;
 
-static void initDictionary( Dictionary* dict)
+static void initAllocator( Allocator* dict)
 {
   dict->memsize = 1<<20;
   dict->mem = malloc( dict->memsize);
@@ -80,54 +80,82 @@ static void initDictionary( Dictionary* dict)
   dict->memidx = 0;
 }
 
-static void swapDictionary( Dictionary* dict1, Dictionary* dict2)
+static void swapAllocator( Allocator* dict1, Allocator* dict2)
 {
-  Dictionary tmp;
-  memcpy( &tmp, dict1, sizeof(Dictionary));
-  memcpy( dict1, dict2, sizeof(Dictionary));
-  memcpy( dict2, &tmp, sizeof(Dictionary));
+  Allocator tmp;
+  memcpy( &tmp, dict1, sizeof(Allocator));
+  memcpy( dict1, dict2, sizeof(Allocator));
+  memcpy( dict2, &tmp, sizeof(Allocator));
 }
 
-static size_t allocDictionaryHandle( Dictionary* dict, const char* word, size_t size)
+typedef struct stdstruct
 {
-  if (dict->memidx + size + 1 > dict->memsize)
-  {
+  char _;
+} stdstruct;
+
+static size_t allocMemHandle( Allocator* dict, const void* ptr, size_t nmemb, size_t elemsize, size_t alignment)
+{
+  size_t fillbytes = nmemb * elemsize;
+  size_t allocbytes = fillbytes;
+  size_t memofs = 0;
+  size_t mi = dict->memidx;
+
+  if (!alignment) {
+    if (elemsize < sizeof(stdstruct)) {
+      alignment = elemsize;
+    } else {
+      alignment = sizeof(stdstruct);
+    }
+  }
+  while (mi % alignment != 0) {++mi;}
+  memofs = mi - dict->memidx;
+  allocbytes += memofs;
+
+  if (dict->memidx + allocbytes > dict->memsize) {
     size_t newsize = dict->memsize * 2;
-    while (dict->memidx + size + 1 > newsize)
-    {
+    while (dict->memidx + allocbytes > newsize) {
       newsize *= 2;
     }
     char* newmem = realloc( dict->mem, newsize);
-    if (newsize < dict->memsize || newmem == NULL)
-    {
+    if (newsize < dict->memsize || newmem == NULL) {
       fprintf( stderr, "out of memory\n");
       exit(1);
     }
     dict->mem = newmem;
     dict->memsize = newsize;
   }
-  size_t rt = dict->memidx;
-  memcpy( dict->mem + dict->memidx, word, size);
-  dict->mem[ dict->memidx + size] = 0;
-  dict->memidx += size + 1;
+  size_t rt = dict->memidx + memofs;
+  dict->memidx += allocbytes;
+  memcpy( dict->mem + rt, ptr, fillbytes);
   return rt;
 }
-static char* getDictionaryString( Dictionary* dict, long long hnd)
+static size_t allocStringHandle( Allocator* dict, const char* word, size_t size)
+{
+  size_t rt = allocMemHandle( dict, word, size+1, 1/*elemsize*/, 1/*alingment*/);
+  dict->mem[ rt + size] = 0;
+  return rt;
+}
+static char* getAllocatorString( Allocator* dict, long long hnd)
 {
   return dict->mem + hnd;
 }
-static void compactDictionary( Dictionary* dict)
+static void* getAllocatorPtr( Allocator* dict, long long hnd)
+{
+  return dict->mem + hnd;
+}
+static void compactAllocator( Allocator* dict)
 {
   char* newmem = realloc( dict->mem, dict->memidx);
   if (newmem) dict->mem = newmem;
 }
-static void freeDictionary( Dictionary* dict)
+static void freeAllocator( Allocator* dict)
 {
     free_( dict->mem);
   memset( dict, 0, sizeof( *dict));
 }
-static Dictionary dictionary;
-
+static Allocator dictionary;
+static Allocator allocator_vocab_code;
+static Allocator allocator_vocab_point;
 
 typedef struct BlockMem
 {
@@ -140,29 +168,30 @@ typedef struct BlockMem
 
 static void initBlockMem( BlockMem* bm, size_t nmemb, size_t size, size_t alignment)
 {
-  bm->mem = malloc_( nmemb * size + (alignment?alignment:0));
+  bm->memsize = nmemb * size + (alignment?alignment:0);
+  bm->mem = malloc_( bm->memsize);
   if (bm->mem == NULL)
   {
     fprintf( stderr, "out of memory\n");
     exit(1);
   }
+  memset( bm->mem, 0, bm->memsize);
   bm->alignment = alignment;
   bm->alignofs = 0;
   if (alignment != 0)
   {
     size_t adridx = (size_t)bm->mem;
+    size_t adridx_base = adridx;
     while (adridx % alignment != 0) ++adridx;
-    bm->alignofs = adridx;
+    bm->alignofs = adridx - adridx_base;
   }
   bm->elemsize = size;
-  bm->memsize = nmemb * size + alignment;
 }
 
 static void freeBlockMem( BlockMem* bm)
 {
   free_( bm->mem);
   bm->mem = NULL;
-  bm->elemsize = 0;
   bm->memsize = 0;
 }
 
@@ -176,9 +205,6 @@ static void* getBlockMemElement( BlockMem* bm, size_t idx)
   }
   return (void*)((char*)bm->mem + ofs - bm->elemsize);
 }
-
-static BlockMem blockMem_code;
-static BlockMem blockMem_point;
 
 
 #undef USE_DOUBLE_PRECISION_FLOAT
@@ -194,7 +220,8 @@ struct vocab_word {
   long long cn;
   int *point;
   size_t wordhnd;
-  char *code, codelen;
+  char *code;
+  unsigned char codelen;
 };
 
 char train_file[MAX_STRING], output_file[MAX_STRING];
@@ -389,7 +416,7 @@ int SearchVocab(char *word) {
   unsigned int hash = GetWordHash(word);
   while (1) {
     if (vocab_hash[hash] == -1) return -1;
-    if (!strcmp(word, getDictionaryString( &dictionary, vocab[vocab_hash[hash]].wordhnd))) return vocab_hash[hash];
+    if (!strcmp(word, getAllocatorString( &dictionary, vocab[vocab_hash[hash]].wordhnd))) return vocab_hash[hash];
     hash = (hash + 1) % vocab_hash_size;
   }
   return -1;
@@ -407,7 +434,7 @@ int ReadWordIndex(FILE *fin) {
 int AddWordToVocab(char *word) {
   unsigned int hash, length = strlen(word);
   if (length >= MAX_STRING) length = MAX_STRING-1;
-  vocab[vocab_size].wordhnd = allocDictionaryHandle( &dictionary, word, length);
+  vocab[vocab_size].wordhnd = allocStringHandle( &dictionary, word, length);
   vocab[vocab_size].cn = 0;
   vocab_size++;
   // Reallocate memory if needed
@@ -444,18 +471,18 @@ void SortVocab() {
   for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
   size = vocab_size;
   train_words = 0;
-  Dictionary new_dictionary;
-  initDictionary( &new_dictionary);
+  Allocator new_dictionary;
+  initAllocator( &new_dictionary);
 
   for (new_a = 1, a = 1; a < size; a++) { // Skip </s>
     // Words with a prefix marked as '--always' will always be used
-    const char* word = getDictionaryString( &dictionary, vocab[a].wordhnd);
+    const char* word = getAllocatorString( &dictionary, vocab[a].wordhnd);
     int useAlways = doUseAlways( word);
 
     // Words occuring less than min_count times will be discarded from the vocab
     if (vocab[a].cn >= min_count || useAlways) {
       vocab[ new_a].cn = vocab[ a].cn;
-      vocab[ new_a].wordhnd = allocDictionaryHandle( &new_dictionary, word, strlen(word));
+      vocab[ new_a].wordhnd = allocStringHandle( &new_dictionary, word, strlen(word));
       // Hash will be re-computed, as after the sorting it is not actual
       hash=GetWordHash( word);
       while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
@@ -474,16 +501,14 @@ void SortVocab() {
   memset( vocab + vocab_size, 0, sizeof( struct vocab_word));
   // ... no clue what this additional element allocated (realloc above) is used for. we are just nulling it, just in case
 
-  swapDictionary( &dictionary, &new_dictionary);
-  freeDictionary( &new_dictionary);
-
-  initBlockMem( &blockMem_code, vocab_size, MAX_CODE_LENGTH * sizeof(char), 0/*default alignment*/);
-  initBlockMem( &blockMem_point, vocab_size, MAX_CODE_LENGTH * sizeof(int), 0/*default alignment*/);
+  swapAllocator( &dictionary, &new_dictionary);
+  freeAllocator( &new_dictionary);
 
   // Allocate memory for the binary tree construction
   for (a = 0; a < vocab_size; a++) {
-    vocab[a].code = (char*)getBlockMemElement( &blockMem_code, a);
-    vocab[a].point = (int*)getBlockMemElement( &blockMem_point, a);;
+    vocab[a].codelen = 0;
+    vocab[a].code = 0;
+    vocab[a].point = 0;
   }
 #ifdef __GNUC__
   if (debug_mode > 1) {
@@ -500,7 +525,10 @@ void CreateBinaryTree() {
   long long *count = (long long *)calloc_(vocab_size * 2 + 1, sizeof(long long));
   long long *binary = (long long *)calloc_(vocab_size * 2 + 1, sizeof(long long));
   long long *parent_node = (long long *)calloc_(vocab_size * 2 + 1, sizeof(long long));
-  if (count == NULL || binary == NULL || parent_node == NULL)
+  size_t* code_hnd = (size_t*)calloc_( vocab_size, sizeof(size_t));
+  size_t* point_hnd = (size_t*)calloc_( vocab_size, sizeof(size_t));
+
+  if (count == NULL || binary == NULL || parent_node == NULL || code_hnd == NULL || point_hnd == NULL)
   {
     fprintf(stderr, "out of memory\n");
     exit(1);
@@ -552,16 +580,30 @@ void CreateBinaryTree() {
       b = parent_node[b];
       if (b == vocab_size * 2 - 2) break;
     }
+    int vocab_point[ MAX_CODE_LENGTH];
+    char vocab_code[ MAX_CODE_LENGTH];
+
     vocab[a].codelen = i;
-    vocab[a].point[0] = vocab_size - 2;
+    vocab_point[0] = vocab_size - 2;
     for (b = 0; b < i; b++) {
-      vocab[a].code[i - b - 1] = code[b];
-      vocab[a].point[i - b] = point[b] - vocab_size;
+      vocab_code[i - b - 1] = code[b];
+      vocab_point[i - b] = point[b] - vocab_size;
     }
+    point_hnd[a] = allocMemHandle( &allocator_vocab_point, vocab_point, i+1, sizeof(int), sizeof(int));
+    code_hnd[a] = allocMemHandle( &allocator_vocab_code, vocab_code, i, sizeof(char), sizeof(char));
+  }
+  compactAllocator( &allocator_vocab_point);
+  compactAllocator( &allocator_vocab_code);
+
+  for (a = 0; a < vocab_size; a++) {
+    vocab[a].code = getAllocatorPtr( &allocator_vocab_code, code_hnd[a]);
+    vocab[a].point = getAllocatorPtr( &allocator_vocab_point, point_hnd[a]);
   }
   free_(count);
   free_(binary);
   free_(parent_node);
+  free_(point_hnd);
+  free_(code_hnd);
 }
 
 void LearnVocabFromTrainFile() {
@@ -599,7 +641,7 @@ void LearnVocabFromTrainFile() {
     }
   }
   SortVocab();
-  compactDictionary( &dictionary);
+  compactAllocator( &dictionary);
   if (debug_mode > 0) {
     printf("Vocab size: %lld\n", vocab_size);
     printf("Words in train file: %lld\n", train_words);
@@ -617,7 +659,7 @@ void SaveVocab() {
   if (fo == NULL) {
      printf("ERROR: cannot open vocab file: %s\n", strerror(errno));
   } else {
-    for (i = 0; i < vocab_size; i++) fprintf(fo, "%s %lld\n", getDictionaryString( &dictionary, vocab[i].wordhnd), vocab[i].cn);
+    for (i = 0; i < vocab_size; i++) fprintf(fo, "%s %lld\n", getAllocatorString( &dictionary, vocab[i].wordhnd), vocab[i].cn);
     fclose(fo);
   }
 }
@@ -641,7 +683,7 @@ void ReadVocab() {
     i++;
   }
   SortVocab();
-  compactDictionary( &dictionary);
+  compactAllocator( &dictionary);
   if (debug_mode > 0) {
     printf("Vocab size: %lld\n", vocab_size);
     printf("Words in train file: %lld\n", train_words);
@@ -659,20 +701,24 @@ void ReadVocab() {
   fclose(fin);  
 }
 
+static BlockMem syn0mem;
+static BlockMem syn1mem;
+static BlockMem syn1negmem;
+
 void InitNet() {
   long long a, b;
-  a = posix_memalign((void **)&syn0, 128, (long long)vocab_size * layer1_size * sizeof(real));
-  if (syn0 == NULL) {printf("Memory allocation failed\n"); exit(1);}
+  initBlockMem( &syn0mem, vocab_size, layer1_size * sizeof(real), 128);
+  syn0 = getBlockMemElement( &syn0mem, 0);
   if (hs) {
-    a = posix_memalign((void **)&syn1, 128, (long long)vocab_size * layer1_size * sizeof(real));
-    if (syn1 == NULL) {printf("Memory allocation failed\n"); exit(1);}
+    initBlockMem( &syn1mem, vocab_size, layer1_size * sizeof(real), 128);
+    syn1 = getBlockMemElement( &syn1mem, 0);
     for (a = 0; a < vocab_size; a++) for (b = 0; b < layer1_size; b++) {
       syn1[a * layer1_size + b] = 0;
     }
   }
   if (negative>0) {
-    a = posix_memalign((void **)&syn1neg, 128, (long long)vocab_size * layer1_size * sizeof(real));
-    if (syn1neg == NULL) {printf("Memory allocation failed\n"); exit(1);}
+    initBlockMem( &syn1negmem, vocab_size, layer1_size * sizeof(real), 128);
+    syn1neg = getBlockMemElement( &syn1negmem, 0);
     for (a = 0; a < vocab_size; a++) for (b = 0; b < layer1_size; b++) {
       syn1neg[a * layer1_size + b] = 0;
     }
@@ -685,13 +731,13 @@ void InitNet() {
 
 void DestroyNet() {
   if (syn0 != NULL) {
-    free_(syn0);
+    freeBlockMem( &syn0mem);
   }
   if (syn1 != NULL) {
-    free_(syn1);
+    freeBlockMem( &syn1mem);
   }
   if (syn1neg != NULL) {
-    free_(syn1neg);
+    freeBlockMem( &syn1negmem);
   }
 }
 
@@ -900,7 +946,7 @@ void TrainModel() {
     // Save the word vectors
     fprintf(fo, "%lld %lld\n", vocab_size, layer1_size);
     for (a = 0; a < vocab_size; a++) {
-      fprintf(fo, "%s ", getDictionaryString( &dictionary, vocab[a].wordhnd));
+      fprintf(fo, "%s ", getAllocatorString( &dictionary, vocab[a].wordhnd));
       if (binary) {
         if (portable) {
           for (b = 0; b < layer1_size; b++) {
@@ -973,7 +1019,7 @@ void TrainModel() {
       }
     }
     // Save the K-means classes
-    for (a = 0; a < vocab_size; a++) fprintf(fo, "%s %d\n", getDictionaryString( &dictionary, vocab[a].wordhnd), cl[a]);
+    for (a = 0; a < vocab_size; a++) fprintf(fo, "%s %d\n", getAllocatorString( &dictionary, vocab[a].wordhnd), cl[a]);
     free_(centcn);
     free_(cent);
     free_(cl);
@@ -1043,7 +1089,10 @@ int main(int argc, char **argv) {
     printf("./word2vec -train data.txt -output vec.txt -debug 2 -size 200 -window 5 -sample 1e-4 -negative 5 -hs 0 -binary 0 -cbow 1\n\n");
     return 0;
   }
-  initDictionary( &dictionary);
+  initAllocator( &dictionary);
+  initAllocator( &allocator_vocab_code);
+  initAllocator( &allocator_vocab_point);
+  
   output_file[0] = 0;
   save_vocab_file[0] = 0;
   read_vocab_file[0] = 0;
@@ -1083,9 +1132,9 @@ int main(int argc, char **argv) {
   DestroyNet();
     free_(vocab_hash);
     free_(expTable);
-  freeDictionary( &dictionary);
-  freeBlockMem( &blockMem_code);
-  freeBlockMem( &blockMem_point);
+  freeAllocator( &dictionary);
+  freeAllocator( &allocator_vocab_code);
+  freeAllocator( &allocator_vocab_point);
 
   return 0;
 }
