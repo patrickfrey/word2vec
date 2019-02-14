@@ -348,11 +348,12 @@ static char* skipCardinal( char* src)
   return src;
 }
 
-static int parseUint( const char* arg)
+static int parseUint( const char* arg, char delim)
 {
   char const* ai = arg;
-  for (; *ai >= '0' && *ai <= '9'; ++ai){}
-  return *ai ? atoi(arg) : -1;
+  int aidx = 0;
+  for (; *ai >= '0' && *ai <= '9'; ++ai,++aidx){}
+  return (*ai == delim || *ai == '\0') && aidx ? atoi(arg) : -1;
 }
 
 void InitTypeMinCountMap()
@@ -374,7 +375,7 @@ void InitTypeMinCountMap()
     }
     *itr = '\0';
     itr = skipSpaces(++itr);
-    int mc = parseUint( itr);
+    int mc = parseUint( itr, ',');
     if (mc < 0) {
       fprintf(stderr, "syntax error in option argument of -type-min-count\n");
       exit(1);
@@ -1175,23 +1176,23 @@ int main(int argc, char **argv) {
   output_file[0] = 0;
   save_vocab_file[0] = 0;
   read_vocab_file[0] = 0;
-  if ((i = ArgPos((char *)"-size", argc, argv)) > 0) {layer1_size = parseUint(argv[i + 1]); if (layer1_size <= 0) optError(argv[i],argv[i + 1]);}
+  if ((i = ArgPos((char *)"-size", argc, argv)) > 0) {layer1_size = parseUint(argv[i + 1], '\0'); if (layer1_size <= 0) optError(argv[i],argv[i + 1]);}
   if ((i = ArgPos((char *)"-train", argc, argv)) > 0) {strcpy(train_file, argv[i + 1]);}
   if ((i = ArgPos((char *)"-save-vocab", argc, argv)) > 0) {strcpy(save_vocab_file, argv[i + 1]);}
   if ((i = ArgPos((char *)"-read-vocab", argc, argv)) > 0) {strcpy(read_vocab_file, argv[i + 1]);}
-  if ((i = ArgPos((char *)"-debug", argc, argv)) > 0) {debug_mode = parseUint(argv[i + 1]); if (debug_mode < 0) optError(argv[i],argv[i + 1]);}
-  if ((i = ArgPos((char *)"-binary", argc, argv)) > 0) {binary = parseUint(argv[i + 1]); if (binary < 0) optError(argv[i],argv[i + 1]);}
-  if ((i = ArgPos((char *)"-portable", argc, argv)) > 0) {portable = parseUint(argv[i + 1]); if (portable < 0) optError(argv[i],argv[i + 1]);}
-  if ((i = ArgPos((char *)"-cbow", argc, argv)) > 0) {cbow = parseUint(argv[i + 1]); if (cbow < 0) optError(argv[i],argv[i + 1]);}
+  if ((i = ArgPos((char *)"-debug", argc, argv)) > 0) {debug_mode = parseUint(argv[i + 1], '\0'); if (debug_mode < 0) optError(argv[i],argv[i + 1]);}
+  if ((i = ArgPos((char *)"-binary", argc, argv)) > 0) {binary = parseUint(argv[i + 1], '\0'); if (binary < 0) optError(argv[i],argv[i + 1]);}
+  if ((i = ArgPos((char *)"-portable", argc, argv)) > 0) {portable = parseUint(argv[i + 1], '\0'); if (portable < 0) optError(argv[i],argv[i + 1]);}
+  if ((i = ArgPos((char *)"-cbow", argc, argv)) > 0) {cbow = parseUint(argv[i + 1], '\0'); if (cbow < 0) optError(argv[i],argv[i + 1]);}
   if ((i = ArgPos((char *)"-alpha", argc, argv)) > 0) {alpha = atof(argv[i + 1]); if (alpha <= 0.0) optError(argv[i],argv[i + 1]);}
   if ((i = ArgPos((char *)"-output", argc, argv)) > 0) {strcpy(output_file, argv[i + 1]);}
-  if ((i = ArgPos((char *)"-window", argc, argv)) > 0) {window = parseUint(argv[i + 1]); if (window < 0) optError(argv[i],argv[i + 1]);}
+  if ((i = ArgPos((char *)"-window", argc, argv)) > 0) {window = parseUint(argv[i + 1], '\0'); if (window < 0) optError(argv[i],argv[i + 1]);}
   if ((i = ArgPos((char *)"-sample", argc, argv)) > 0) {sample = atof(argv[i + 1]); if (sample <= 0.0) optError(argv[i],argv[i + 1]);}
-  if ((i = ArgPos((char *)"-hs", argc, argv)) > 0) {hs = parseUint(argv[i + 1]); if (hs < 0) optError(argv[i],argv[i + 1]);}
-  if ((i = ArgPos((char *)"-negative", argc, argv)) > 0) {negative = parseUint(argv[i + 1]); if (negative < 0) optError(argv[i],argv[i + 1]);}
-  if ((i = ArgPos((char *)"-threads", argc, argv)) > 0) {num_threads = parseUint(argv[i + 1]); if (num_threads <= 0) optError(argv[i],argv[i + 1]);}
-  if ((i = ArgPos((char *)"-min-count", argc, argv)) > 0) {min_count = parseUint(argv[i + 1]); if (min_count <= 0) optError(argv[i],argv[i + 1]);}
-  if ((i = ArgPos((char *)"-classes", argc, argv)) > 0) {classes = parseUint(argv[i + 1]); if (classes < 0) optError(argv[i],argv[i + 1]);}
+  if ((i = ArgPos((char *)"-hs", argc, argv)) > 0) {hs = parseUint(argv[i + 1], '\0'); if (hs < 0) optError(argv[i],argv[i + 1]);}
+  if ((i = ArgPos((char *)"-negative", argc, argv)) > 0) {negative = parseUint(argv[i + 1], '\0'); if (negative < 0) optError(argv[i],argv[i + 1]);}
+  if ((i = ArgPos((char *)"-threads", argc, argv)) > 0) {num_threads = parseUint(argv[i + 1], '\0'); if (num_threads <= 0) optError(argv[i],argv[i + 1]);}
+  if ((i = ArgPos((char *)"-min-count", argc, argv)) > 0) {min_count = parseUint(argv[i + 1], '\0'); if (min_count <= 0) optError(argv[i],argv[i + 1]);}
+  if ((i = ArgPos((char *)"-classes", argc, argv)) > 0) {classes = parseUint(argv[i + 1], '\0'); if (classes < 0) optError(argv[i],argv[i + 1]);}
   if ((i = ArgPos((char *)"-type-min-count", argc, argv)) > 0) {strcpy(type_min_count_buf, argv[i + 1]); if (type_min_count_buf[0]=='-') optError(argv[i],argv[i + 1]);}
   if ((i = ArgPos((char *)"-type-prefix-delim", argc, argv)) > 0) {type_prefix_delim = argv[i + 1][0]; if (type_prefix_delim =='-' || argv[i + 1][1]) optError( argv[i],argv[i + 1]);}
 
