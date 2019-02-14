@@ -23,8 +23,9 @@
 #include <malloc.h>
 #include <limits.h>
 
-#define MAX_STRING_ARRAY 10
+#define MAX_MAP_SIZE 50
 #define MAX_STRING 100
+#define MAX_TYPEPREFIX 16
 #define EXP_TABLE_SIZE 1000
 #define MAX_EXP 6
 #define MAX_SENTENCE_LENGTH 1000
@@ -225,10 +226,16 @@ struct vocab_word {
   unsigned char codelen;
 };
 
+char type_prefix_delim='\0';
 char train_file[MAX_STRING], output_file[MAX_STRING];
 char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
-char word_prefix_use_always_buf[ MAX_STRING] = "";
-char* word_prefix_use_always[ MAX_STRING_ARRAY] = {0};
+char type_min_count_buf[ MAX_STRING] = "";
+typedef struct type_min_count_map_elem {
+  char* prefix;
+  int min_count;
+} type_min_count_map_elem;
+type_min_count_map_elem type_min_count_map[ MAX_MAP_SIZE] = {{NULL,0}};
+int type_min_count_map_size = 0;
 struct vocab_word *vocab;
 int binary = 0, portable = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 5, num_threads = 1, min_reduce = 1;
 int *vocab_hash;
@@ -318,47 +325,108 @@ unsigned long sdbm_hash( const char *str)
   return hash;
 }
 
-void InitAlwaysUsedWords()
+static char* skipSpaces( char* src)
 {
-  int i = 0, bi = 0, last_i = 0;
-  for (i = 0; i < MAX_STRING && word_prefix_use_always_buf[i]; ++i) {
-    if (word_prefix_use_always_buf[i] == ',') {
-      word_prefix_use_always_buf[i] = '\0';
-      if (i == last_i) {
-        last_i = i+1;
-        continue;
-      }
-      word_prefix_use_always[ bi++] = word_prefix_use_always_buf + last_i;
-      last_i = i+1;
+  while (*src && (unsigned char)*src <= 32) ++src;
+  return src;
+}
 
-      if (bi >= MAX_STRING_ARRAY-1) {
-        fprintf(stderr, "array passed with option --always exceeds size %d\n", (int)MAX_STRING_ARRAY);
-        exit(1);
-      }
+static char* skipType( char* src, char delim)
+{
+  while (*src && *src != delim) ++src;
+  return src;
+}
+
+static int isCardinal( char ch)
+{
+  return (ch >= '0' && ch <= '9');
+}
+
+static char* skipCardinal( char* src)
+{
+  while (isCardinal(*src)) ++src;
+  return src;
+}
+
+static int parseUint( const char* arg)
+{
+  char const* ai = arg;
+  for (; *ai >= '0' && *ai <= '9'; ++ai){}
+  return *ai ? atoi(arg) : -1;
+}
+
+void InitTypeMinCountMap()
+{
+  char* itr = type_min_count_buf;
+
+  if (type_prefix_delim == '\0' && itr[0] != 0) {
+    fprintf(stderr, "option -type-min-count specified, but -type-prefix not\n");
+    exit(1);
+  }
+  while (*itr)
+  {
+    itr = skipSpaces( itr);
+    char* tp = itr;
+    itr = skipType( itr, '=');
+    if (!*tp || !*itr) {
+      fprintf(stderr, "syntax error in option argument of -type-min-count\n");
+      exit(1);
     }
-  }
-  if (word_prefix_use_always_buf[last_i]) {
-     word_prefix_use_always[ bi++] = word_prefix_use_always_buf + last_i;
-  }
-  word_prefix_use_always[ bi] = 0;
-
-  char** ai = word_prefix_use_always;
-  for (; *ai; ++ai) {
-    fprintf( stderr, "do always use words with prefix '%s'\n", *ai);
+    *itr = '\0';
+    itr = skipSpaces(++itr);
+    int mc = parseUint( itr);
+    if (mc < 0) {
+      fprintf(stderr, "syntax error in option argument of -type-min-count\n");
+      exit(1);
+    }
+    itr = skipCardinal( itr);
+    itr = skipSpaces( itr);
+    if (type_min_count_map_size+1 >= MAX_MAP_SIZE)
+    {
+      fprintf(stderr, "too many elements defined with -type-min-count\n");
+      exit(1);
+    }
+    type_min_count_map[ type_min_count_map_size].prefix = tp;
+    type_min_count_map[ type_min_count_map_size].min_count = mc;
+    ++type_min_count_map_size;
+    type_min_count_map[ type_min_count_map_size].prefix = 0;
+    type_min_count_map[ type_min_count_map_size].min_count = 0;
+    if (*itr == ',')
+    {
+      ++itr;
+    }
+    else if (*itr)
+    {
+      fprintf(stderr, "syntax error in option argument of -type-min-count\n");
+      exit(1);
+    }
   }
 }
 
-static int doUseAlways( char const* word)
+int getMinCount( const char* word)
 {
-  char** ai = word_prefix_use_always;
-  for (; *ai; ++ai) {
-    int pi = 0;
-    for (; (*ai)[pi] && word[pi] && (*ai)[pi] == word[pi]; ++pi){}
-    if (!(*ai)[pi]) {
-      return 1;
-    }
-  }
-  return 0;
+	char prefixbuf[ MAX_TYPEPREFIX-1];
+	char const* wi = word;
+	int ti;
+	int widx;
+
+	if (type_prefix_delim == '\0') return min_count;
+	for (widx=0; *wi && *wi != type_prefix_delim && widx < MAX_TYPEPREFIX-1; ++wi,++widx)
+	{
+		prefixbuf[ widx] = *wi;
+	}
+	if (*wi == type_prefix_delim)
+	{
+		prefixbuf[ widx] = 0;
+		for (ti=0; ti<type_min_count_map_size; ++ti)
+		{
+			if (0==strcmp( type_min_count_map[ ti].prefix, prefixbuf))
+			{
+				return type_min_count_map[ ti].min_count;
+			}
+		}
+	}
+	return min_count;
 }
 
 
@@ -476,12 +544,11 @@ void SortVocab() {
   initAllocator( &new_dictionary);
 
   for (new_a = 1, a = 1; a < size; a++) { // Skip </s>
-    // Words with a prefix marked as '--always' will always be used
     const char* word = getAllocatorString( &dictionary, vocab[a].wordhnd);
-    int useAlways = doUseAlways( word);
+    int mc = getMinCount( word);
 
     // Words occuring less than min_count times will be discarded from the vocab
-    if (vocab[a].cn >= min_count || useAlways) {
+    if (vocab[a].cn >= mc) {
       vocab[ new_a].cn = vocab[ a].cn;
       vocab[ new_a].wordhnd = allocStringHandle( &new_dictionary, word, strlen(word));
       // Hash will be re-computed, as after the sorting it is not actual
@@ -490,6 +557,8 @@ void SortVocab() {
       vocab_hash[ hash] = new_a;
       train_words += vocab[ new_a].cn;
       ++new_a;
+    } else if (debug_mode > 1) {
+      fprintf( stderr, "word %s eliminated because min count %d >= %d\n", word, mc, (int)vocab[a].cn);
     }
   }
   vocab_size = new_a;
@@ -513,7 +582,7 @@ void SortVocab() {
   }
 #ifdef __GNUC__
   if (debug_mode > 1) {
-    printf("memory allocated %u mega bytes\n", (unsigned int)(memory_allocated >> 20));
+    fprintf(stderr, "memory allocated %u mega bytes\n", (unsigned int)(memory_allocated >> 20));
   }
 #endif
 }
@@ -614,7 +683,7 @@ void LearnVocabFromTrainFile() {
   for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
   fin = fopen(train_file, "rb");
   if (fin == NULL) {
-    printf("ERROR: cannot open training data file: %s\n", strerror(errno));
+    fprintf( stderr, "ERROR: cannot open training data file: %s\n", strerror(errno));
     exit(1);
   }
   vocab_size = 0;
@@ -625,9 +694,9 @@ void LearnVocabFromTrainFile() {
     train_words++;
     if ((debug_mode > 1) && (train_words % 1000000 == 0)) {
 #ifdef __GNUC__
-      printf("words %d million, vocab size=%u million, memory %u mega bytes\n", (unsigned int)(train_words / 1000000), (unsigned int)(vocab_size / 1000000), (unsigned int)(memory_allocated >> 20));
+      fprintf( stderr, "words %d million, vocab size=%u million, memory %u mega bytes\n", (unsigned int)(train_words / 1000000), (unsigned int)(vocab_size / 1000000), (unsigned int)(memory_allocated >> 20));
 #else
-      printf("words %d million, vocab size=%u million\n", (unsigned int)(train_words / 1000000), (unsigned int)(vocab_size / 1000000));
+      fprintf( stderr, "words %d million, vocab size=%u million\n", (unsigned int)(train_words / 1000000), (unsigned int)(vocab_size / 1000000));
 #endif
       fflush(stdout);
     }
@@ -637,7 +706,7 @@ void LearnVocabFromTrainFile() {
       vocab[a].cn = 1;
     } else vocab[i].cn++;
     if (vocab_size > vocab_hash_size * 0.7) {
-      fprintf( stderr, "hash table size too small");
+      fprintf( stderr, "hash table size too small\n");
       exit(1);
     }
   }
@@ -658,7 +727,7 @@ void SaveVocab() {
   long long i;
   FILE *fo = fopen(save_vocab_file, "wb");
   if (fo == NULL) {
-     printf("ERROR: cannot open vocab file: %s\n", strerror(errno));
+    fprintf( stderr, "ERROR: cannot open vocab file: %s\n", strerror(errno));
   } else {
     for (i = 0; i < vocab_size; i++) fprintf(fo, "%s %lld\n", getAllocatorString( &dictionary, vocab[i].wordhnd), vocab[i].cn);
     fclose(fo);
@@ -671,7 +740,7 @@ void ReadVocab() {
   char word[MAX_STRING];
   FILE *fin = fopen(read_vocab_file, "rb");
   if (fin == NULL) {
-    printf("Cannot open vocabulary file %s\n", strerror(errno));
+    fprintf( stderr, "Cannot open vocabulary file %s\n", strerror(errno));
     exit(1);
   }
   for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
@@ -694,7 +763,7 @@ void ReadVocab() {
   }
   fin = fopen(train_file, "rb");
   if (fin == NULL) {
-    printf("ERROR: Cannot open training data file: %s\n", strerror(errno));
+    fprintf( stderr, "ERROR: Cannot open training data file: %s\n", strerror(errno));
     exit(1);
   }
   fseek(fin, 0, SEEK_END);
@@ -758,7 +827,7 @@ void *TrainModelThread(void *id) {
   }
   FILE *fi = fopen(train_file, "rb");
   if (fi == NULL) {
-    fprintf(stderr, "no such file or directory: %s", train_file);
+    fprintf(stderr, "no such file or directory: %s\n", train_file);
     exit(1);
   }
   fseek(fi, file_size / (long long)num_threads * (long long)id, SEEK_SET);
@@ -1035,12 +1104,18 @@ int ArgPos(char *str, int argc, char **argv) {
   int a;
   for (a = 1; a < argc; a++) if (!strcmp(str, argv[a])) {
     if (a == argc - 1) {
-      printf("Argument missing for %s\n", str);
+      fprintf( stderr, "Argument missing for %s\n", str);
       exit(1);
     }
     return a;
   }
   return -1;
+}
+
+static void optError( const char* opt)
+{
+    fprintf( stderr, "Argument error for option %s\n", opt);
+    exit(1);
 }
 
 int main(int argc, char **argv) {
@@ -1066,8 +1141,13 @@ int main(int argc, char **argv) {
     printf("\t\tNumber of negative examples; default is 0, common values are 5 - 10 (0 = not used)\n");
     printf("\t-threads <int>\n");
     printf("\t\tUse <int> threads (default 1)\n");
+    printf("\t-type-prefix-delim <delim char>\n");
+    printf("\t\tThe ascii character <delim char> is used as delimiter for type and value of a feature\n");
+    printf("\t\tFor example if you define <delim char> as '#' a feature 'bla#blu' has type 'bla' and value 'blu'.\n");
     printf("\t-min-count <int>\n");
     printf("\t\tThis will discard words that appear less than <int> times; default is 5\n");
+    printf("\t-type-min-count <prefix>=<min count>\n");
+    printf("\t\tDefine min count per type (-type-prefix defined), default is what is defined with -min-count\n");
     printf("\t-alpha <float>\n");
     printf("\t\tSet the starting learning rate; default is 0.025\n");
     printf("\t-classes <int>\n");
@@ -1078,8 +1158,6 @@ int main(int argc, char **argv) {
     printf("\t\tSave the resulting vectors in binary moded; default is 0 (off)\n");
     printf("\t-portable <int>\n");
     printf("\t\tIn case of binary, save the resulting binary vectors in portable network byte order; default is 0 (off)\n");
-    printf("\t-always <prefix>\n");
-    printf("\t\tDo use index words with prefix <prefix> (separated by commas)\n");
     printf("\t-save-vocab <file>\n");
     printf("\t\tThe vocabulary will be saved to <file>\n");
     printf("\t-read-vocab <file>\n");
@@ -1093,30 +1171,56 @@ int main(int argc, char **argv) {
   initAllocator( &dictionary);
   initAllocator( &allocator_vocab_code);
   initAllocator( &allocator_vocab_point);
-  
+
   output_file[0] = 0;
   save_vocab_file[0] = 0;
   read_vocab_file[0] = 0;
-  if ((i = ArgPos((char *)"-size", argc, argv)) > 0) layer1_size = atoi(argv[i + 1]);
-  if ((i = ArgPos((char *)"-train", argc, argv)) > 0) strcpy(train_file, argv[i + 1]);
-  if ((i = ArgPos((char *)"-save-vocab", argc, argv)) > 0) strcpy(save_vocab_file, argv[i + 1]);
-  if ((i = ArgPos((char *)"-read-vocab", argc, argv)) > 0) strcpy(read_vocab_file, argv[i + 1]);
-  if ((i = ArgPos((char *)"-debug", argc, argv)) > 0) debug_mode = atoi(argv[i + 1]);
-  if ((i = ArgPos((char *)"-binary", argc, argv)) > 0) binary = atoi(argv[i + 1]);
-  if ((i = ArgPos((char *)"-portable", argc, argv)) > 0) portable = atoi(argv[i + 1]);
-  if ((i = ArgPos((char *)"-cbow", argc, argv)) > 0) cbow = atoi(argv[i + 1]);
-  if ((i = ArgPos((char *)"-alpha", argc, argv)) > 0) alpha = atof(argv[i + 1]);
-  if ((i = ArgPos((char *)"-output", argc, argv)) > 0) strcpy(output_file, argv[i + 1]);
-  if ((i = ArgPos((char *)"-window", argc, argv)) > 0) window = atoi(argv[i + 1]);
-  if ((i = ArgPos((char *)"-sample", argc, argv)) > 0) sample = atof(argv[i + 1]);
-  if ((i = ArgPos((char *)"-hs", argc, argv)) > 0) hs = atoi(argv[i + 1]);
-  if ((i = ArgPos((char *)"-negative", argc, argv)) > 0) negative = atoi(argv[i + 1]);
-  if ((i = ArgPos((char *)"-threads", argc, argv)) > 0) num_threads = atoi(argv[i + 1]);
-  if ((i = ArgPos((char *)"-min-count", argc, argv)) > 0) min_count = atoi(argv[i + 1]);
-  if ((i = ArgPos((char *)"-classes", argc, argv)) > 0) classes = atoi(argv[i + 1]);
-  if ((i = ArgPos((char *)"-always", argc, argv)) > 0) strcpy(word_prefix_use_always_buf, argv[i + 1]);
+  if ((i = ArgPos((char *)"-size", argc, argv)) > 0) {layer1_size = parseUint(argv[i + 1]); if (layer1_size <= 0) optError(argv[i]);}
+  if ((i = ArgPos((char *)"-train", argc, argv)) > 0) {strcpy(train_file, argv[i + 1]);}
+  if ((i = ArgPos((char *)"-save-vocab", argc, argv)) > 0) {strcpy(save_vocab_file, argv[i + 1]);}
+  if ((i = ArgPos((char *)"-read-vocab", argc, argv)) > 0) {strcpy(read_vocab_file, argv[i + 1]);}
+  if ((i = ArgPos((char *)"-debug", argc, argv)) > 0) {debug_mode = parseUint(argv[i + 1]); if (debug_mode < 0) optError(argv[i]);}
+  if ((i = ArgPos((char *)"-binary", argc, argv)) > 0) {binary = parseUint(argv[i + 1]); if (binary < 0) optError(argv[i]);}
+  if ((i = ArgPos((char *)"-portable", argc, argv)) > 0) {portable = parseUint(argv[i + 1]); if (portable < 0) optError(argv[i]);}
+  if ((i = ArgPos((char *)"-cbow", argc, argv)) > 0) {cbow = parseUint(argv[i + 1]); if (cbow < 0) optError(argv[i]);}
+  if ((i = ArgPos((char *)"-alpha", argc, argv)) > 0) {alpha = atof(argv[i + 1]); if (alpha <= 0.0) optError(argv[i]);}
+  if ((i = ArgPos((char *)"-output", argc, argv)) > 0) {strcpy(output_file, argv[i + 1]);}
+  if ((i = ArgPos((char *)"-window", argc, argv)) > 0) {window = parseUint(argv[i + 1]); if (window < 0) optError(argv[i]);}
+  if ((i = ArgPos((char *)"-sample", argc, argv)) > 0) {sample = atof(argv[i + 1]); if (sample <= 0.0) optError(argv[i]);}
+  if ((i = ArgPos((char *)"-hs", argc, argv)) > 0) {hs = parseUint(argv[i + 1]); if (hs < 0) optError(argv[i]);}
+  if ((i = ArgPos((char *)"-negative", argc, argv)) > 0) {negative = parseUint(argv[i + 1]); if (negative < 0) optError(argv[i]);}
+  if ((i = ArgPos((char *)"-threads", argc, argv)) > 0) {num_threads = parseUint(argv[i + 1]); if (num_threads <= 0) optError(argv[i]);}
+  if ((i = ArgPos((char *)"-min-count", argc, argv)) > 0) {min_count = parseUint(argv[i + 1]); if (min_count <= 0) optError(argv[i]);}
+  if ((i = ArgPos((char *)"-classes", argc, argv)) > 0) {classes = parseUint(argv[i + 1]); if (classes < 0) optError(argv[i]);}
+  if ((i = ArgPos((char *)"-type-min-count", argc, argv)) > 0) {strcpy(type_min_count_buf, argv[i + 1]); if (type_min_count_buf[0]=='-') optError(argv[i]);}
+  if ((i = ArgPos((char *)"-type-prefix-delim", argc, argv)) > 0) {type_prefix_delim = argv[i + 1][0]; if (type_prefix_delim =='-' || argv[i + 1][1]) optError( argv[i]);}
 
-  InitAlwaysUsedWords();
+  InitTypeMinCountMap();
+  if (debug_mode > 1) {
+    int ti;
+    fprintf( stderr, "parameter %s = %d\n", "size", (int)layer1_size);
+    fprintf( stderr, "parameter %s = %s\n", "train", train_file);
+    fprintf( stderr, "parameter %s = %s\n", "save-vocab", save_vocab_file);
+    fprintf( stderr, "parameter %s = %s\n", "read-vocab", read_vocab_file);
+    fprintf( stderr, "parameter %s = %d\n", "debug", debug_mode);
+    fprintf( stderr, "parameter %s = %d\n", "binary", binary);
+    fprintf( stderr, "parameter %s = %d\n", "portable", portable);
+    fprintf( stderr, "parameter %s = %d\n", "cbow", cbow);
+    fprintf( stderr, "parameter %s = %.7f\n", "alpha", alpha);
+    fprintf( stderr, "parameter %s = %s\n", "output", output_file);
+    fprintf( stderr, "parameter %s = %d\n", "window", window);
+    fprintf( stderr, "parameter %s = %.7f\n", "sample", sample);
+    fprintf( stderr, "parameter %s = %d\n", "hs", hs);
+    fprintf( stderr, "parameter %s = %d\n", "negative", negative);
+    fprintf( stderr, "parameter %s = %d\n", "threads", num_threads);
+    fprintf( stderr, "parameter %s = %d\n", "min-count", min_count);
+    fprintf( stderr, "parameter %s = %d\n", "negative", negative);
+    fprintf( stderr, "parameter %s = %lld\n", "classes", classes);
+    fprintf( stderr, "parameter %s = %s\n", "type-prefix-delim", type_min_count_buf);
+    for (ti=0; ti<type_min_count_map_size; ++ti) {
+      fprintf( stderr, "type prefix %s has min count %d\n", type_min_count_map[ti].prefix, type_min_count_map[ti].min_count);
+    }
+  }
 
   vocab = (struct vocab_word *)calloc_(vocab_max_size, sizeof(struct vocab_word));
   vocab_hash = (int *)calloc_(vocab_hash_size, sizeof(int));
